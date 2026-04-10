@@ -3,7 +3,38 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>愛すべき野良猫の会 | 保護猫譲渡会</title>
+<title>愛すべき野良猫の会 | 保護猫の里親募集・譲渡会（仙台市）</title>
+<meta name="description" content="仙台市を中心に活動する保護猫団体「愛すべき野良猫の会」。TNR・地域猫活動・保護猫の里親募集・譲渡会を行っています。猫を家族に迎えたい方はぜひご覧ください。">
+<meta name="keywords" content="保護猫,里親募集,譲渡会,仙台市,宮城県,TNR,地域猫,愛すべき野良猫の会,ゴンママ,保護猫譲渡会仙台,猫里親,ほごねこ">
+<meta name="robots" content="index, follow">
+<meta property="og:title" content="愛すべき野良猫の会 | 保護猫の里親募集・譲渡会（仙台市）">
+<meta property="og:description" content="仙台市を中心に活動する保護猫団体。TNR・地域猫活動・保護猫の里親募集・譲渡会を行っています。">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://murakumo2000.github.io/LovelyStrayCat01/">
+<meta property="og:locale" content="ja_JP">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="愛すべき野良猫の会 | 保護猫の里親募集・譲渡会（仙台市）">
+<meta name="twitter:description" content="仙台市を中心に活動する保護猫団体。TNR・地域猫活動・保護猫の里親募集・譲渡会を行っています。">
+<link rel="canonical" href="https://murakumo2000.github.io/LovelyStrayCat01/">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  "name": "愛すべき野良猫の会",
+  "alternateName": "Aisubekinoranekonokai",
+  "description": "仙台市を中心にTNR・地域猫活動・保護猫の里親募集・譲渡会を行っている任意団体です。",
+  "url": "https://murakumo2000.github.io/LovelyStrayCat01/",
+  "sameAs": [
+    "https://aisubekinoranekonokai-gonmama.jimdosite.com/",
+    "https://aisubekigonmama.amebaownd.com"
+  ],
+  "areaServed": {
+    "@type": "City",
+    "name": "仙台市"
+  },
+  "keywords": "保護猫,里親募集,譲渡会,仙台市,TNR,地域猫"
+}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@300;400;500;700&family=Shippori+Mincho:wght@400;600&display=swap" rel="stylesheet">
 
@@ -14,6 +45,16 @@ import { getFirestore, collection, doc, getDocs, setDoc, deleteDoc, query, order
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+// ─── 全角・半角変換ユーティリティ ──────────────────────
+function toZenkaku(str) {
+  return String(str).replace(/[0-9]/g, s => String.fromCharCode(s.charCodeAt(0) + 0xFEE0))
+                    .replace(/\./g, '．');
+}
+function toHankaku(str) {
+  return String(str).replace(/[０-９]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0))
+                    .replace(/．/g, '.');
+}
 
 // ─── Firebase 設定 ───────────────────────────────────────
 const firebaseConfig = {
@@ -441,6 +482,18 @@ window.editCat = id => {
   document.getElementById("f_weight").value      = cat.weight||"";
   document.getElementById("f_status").value      = cat.status||"available";
   document.getElementById("f_area").value        = cat.area||"";
+  // 年齢を数値と単位に分解してセット
+  const ageMatch = (cat.age||"").match(/(\d+[\d.,]*)(ヶ月|歳)/);
+  if (ageMatch) {
+    document.getElementById("f_age_num").value  = toHankaku(ageMatch[1]);
+    document.getElementById("f_age_unit").value = ageMatch[2];
+  } else {
+    document.getElementById("f_age_num").value  = "";
+    document.getElementById("f_age_unit").value = "歳";
+  }
+  // 体重を数値のみにしてセット
+  const weightMatch = (cat.weight||"").match(/([\d.,０-９]+)/);
+  document.getElementById("f_weight_num").value = weightMatch ? toHankaku(weightMatch[1]) : "";
   document.getElementById("f_personality").value = (cat.personality||[]).join(",");
   document.getElementById("f_tags").value        = (cat.tags||[]).join(",");
   document.getElementById("f_comment").value     = cat.comment||"";
@@ -459,8 +512,10 @@ window.editCat = id => {
 function resetCatForm() {
   editingCatId = null;
   document.getElementById("catFormTitle").textContent = "新しい子を登録";
-  ["f_name","f_ruby","f_breed","f_color","f_age","f_weight","f_area",
-   "f_personality","f_tags","f_comment","f_health","f_imgUrl"].forEach(id => document.getElementById(id).value="");
+  ["f_name","f_ruby","f_breed","f_color","f_area",
+   "f_personality","f_tags","f_comment","f_health","f_imgUrl",
+   "f_age_num","f_weight_num"].forEach(id => document.getElementById(id).value="");
+  document.getElementById("f_age_unit").value  = "歳";
   document.getElementById("f_gender").value   = "female";
   document.getElementById("f_ageGroup").value = "adult";
   document.getElementById("f_status").value   = "available";
@@ -481,16 +536,21 @@ window.saveCat = async () => {
     if (_pendingImgFile) {
       imgUrl = await uploadToCloudinary(_pendingImgFile);
     }
+    const ageNum  = document.getElementById("f_age_num").value.trim();
+    const ageUnit = document.getElementById("f_age_unit").value;
+    const ageStr  = ageNum ? `推定 ${toZenkaku(ageNum)}${ageUnit}` : "不明";
+    const weightNum = document.getElementById("f_weight_num").value.trim();
+    const weightStr = weightNum ? `${toZenkaku(weightNum)}kg` : "";
     const id   = editingCatId || `cat_${Date.now()}`;
     const data = {
       name, ruby: document.getElementById("f_ruby").value.trim(),
       img: imgUrl,
       gender:    document.getElementById("f_gender").value,
-      age:       document.getElementById("f_age").value.trim()||"不明",
+      age:       ageStr,
       ageGroup:  document.getElementById("f_ageGroup").value,
       breed:     document.getElementById("f_breed").value.trim()||"不明",
       color:     document.getElementById("f_color").value.trim(),
-      weight:    document.getElementById("f_weight").value.trim(),
+      weight:    weightStr,
       personality: document.getElementById("f_personality").value.split(",").map(s=>s.trim()).filter(Boolean),
       tags:        document.getElementById("f_tags").value.split(",").map(s=>s.trim()).filter(Boolean),
       comment:   document.getElementById("f_comment").value.trim(),
@@ -935,16 +995,51 @@ footer p{font-size:10px;color:rgba(255,255,255,.38);}
 @keyframes modalIn{from{opacity:0;transform:scale(.91) translateY(14px)}to{opacity:1;transform:scale(1) translateY(0)}}
 
 @media(max-width:768px){
-  header{padding:0 14px;}
-  .hero{padding:48px 18px 64px;}
-  .section,.schedule-section,.about-section{padding:50px 18px;}
-  .event-card-inner{grid-template-columns:90px 1fr;grid-template-rows:auto auto;}
-  .event-action{grid-column:1/-1;padding:0 14px 14px;}
+  header{padding:0 14px;height:58px;}
+  .logo-text .main{font-size:13px;}
+  .logo-text .sub{display:none;}
+  .logo-icon{width:36px;height:36px;font-size:17px;}
+  nav a{display:none;}
+  #loginArea{display:none;}
+  .btn-admin{padding:7px 13px;font-size:11px;}
+  .hero{padding:44px 16px 60px;}
+  .hero h1{font-size:26px;}
+  .hero p{font-size:12px;}
+  .hero-actions{flex-direction:column;align-items:center;gap:10px;}
+  .btn-primary,.btn-outline{width:100%;max-width:280px;text-align:center;box-sizing:border-box;}
+  .section{padding:44px 16px;}
+  .schedule-section{padding:44px 16px;}
+  .about-section{padding:44px 16px;}
+  .event-card-inner{display:flex;flex-direction:column;}
+  .event-date-block{flex-direction:row;padding:14px 16px;gap:10px;justify-content:flex-start;align-items:center;height:auto;}
+  .event-day{font-size:28px;}
+  .event-info{padding:14px 16px 0;}
+  .event-action{padding:12px 16px;}
+  .event-detail-btn{width:100%;}
+  .cat-grid{grid-template-columns:1fr;}
   .about-inner{grid-template-columns:1fr;}
   .paw-circle{display:none;}
-  footer{padding:32px 18px;}
+  footer{padding:32px 16px;}
+  .footer-links{display:flex;flex-direction:column;gap:10px;}
+  .filter-bar{gap:6px;}
+  .filter-btn{padding:6px 12px;font-size:11px;}
+  .overlay{padding:12px;}
+  .detail-modal,.event-modal{border-radius:16px;max-height:95vh;}
+  .modal-body{padding:16px 18px 20px;}
+  .event-modal-body{padding:16px 18px 20px;}
+  .admin-overlay{padding:0;}
+  .admin-panel{border-radius:0;min-height:100vh;margin:0;}
+  .admin-header{border-radius:0;padding:14px 16px;}
+  .admin-body{padding:12px 14px;}
+  .admin-tabs{overflow-x:auto;gap:0;-webkit-overflow-scrolling:touch;}
+  .admin-tab{padding:8px 12px;font-size:11px;white-space:nowrap;}
   .form-grid{grid-template-columns:1fr;}
-  .admin-body{padding:14px 16px;}
+  .admin-cat-list{max-height:none;}
+  .admin-cat-actions{flex-wrap:wrap;}
+  .login-modal{padding:24px 18px;}
+  .toast{font-size:12px;padding:10px 16px;max-width:90vw;white-space:normal;text-align:center;}
+  .cat-tags{gap:5px;}
+  .event-cats-grid{grid-template-columns:1fr;}
 }
 </style>
 </head>
@@ -1132,9 +1227,22 @@ footer p{font-size:10px;color:rgba(255,255,255,.38);}
           <div class="form-group"><label>品種</label><input type="text" id="f_breed" placeholder="例：キジ白"></div>
           <div class="form-group"><label>毛色</label><input type="text" id="f_color" placeholder="例：キジ白"></div>
           <div class="form-group"><label>性別</label><select id="f_gender"><option value="female">♀ 女の子</option><option value="male">♂ 男の子</option></select></div>
-          <div class="form-group"><label>推定年齢</label><input type="text" id="f_age" placeholder="例：推定 2歳"></div>
-          <div class="form-group"><label>年齢区分</label><select id="f_ageGroup"><option value="kitten">仔猫（〜1歳未満）</option><option value="adult">成猫（1歳以上）</option></select></div>
-          <div class="form-group"><label>体重</label><input type="text" id="f_weight" placeholder="例：3.2kg"></div>
+          <div class="form-group"><label>推定年齢（数字のみ入力）</label>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input type="number" id="f_age_num" placeholder="例：２" min="0" max="30" step="1" style="width:80px;flex-shrink:0;" inputmode="numeric">
+              <select id="f_age_unit" style="flex:1;">
+                <option value="ヶ月">ヶ月</option>
+                <option value="歳" selected>歳</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group"><label>年齢区分</label><select id="f_ageGroup"><option value="kitten">仔猫（〜１歳未満）</option><option value="adult">成猫（１歳以上）</option></select></div>
+          <div class="form-group"><label>体重（数字のみ入力）</label>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input type="number" id="f_weight_num" placeholder="例：３．２" min="0" max="20" step="0.1" style="flex:1;" inputmode="decimal">
+              <span style="font-size:13px;color:var(--text-mid);white-space:nowrap;">kg</span>
+            </div>
+          </div>
           <div class="form-group"><label>募集ステータス</label><select id="f_status"><option value="available">募集中</option><option value="pending">応募検討中</option><option value="adopted">譲渡済み</option></select></div>
           <div class="form-group"><label>保護エリア</label><input type="text" id="f_area" placeholder="例：仙台市保護"></div>
           <!-- 写真 -->
