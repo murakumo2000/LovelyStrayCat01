@@ -448,6 +448,10 @@ window.toggleCatVis = async id => {
   if (!cat) return;
   cat.visible = cat.visible === false ? true : false;
   await saveCatToDb(id, cat);
+  if (!cat.visible) {
+    await addUpdateLog("cat_hidden", `「${cat.name}」が一時的に非公開になりました`);
+    await loadUpdates();
+  }
   renderAdminCats(); renderGrid();
   showToast(`「${cat.name}」を${cat.visible?"表示":"非表示"}にしました`);
 };
@@ -574,6 +578,17 @@ window.saveCat = async () => {
       cats.push({ id, ...data });
     }
     showToast(`「${name}」を${editingCatId?"更新":"登録"}しました ✅`);
+    // 更新ログを自動記録
+    const prevCat = editingCatId ? cats.find(c => c.id === editingCatId) : null;
+    if (!editingCatId) {
+      await addUpdateLog("cat_new", `新しい子が加わりました「${name}」（${data.breed} / ${data.age}）`);
+    } else if (prevCat && prevCat.status !== data.status) {
+      const sl = {available:"募集中", pending:"応募検討中", adopted:"譲渡済み"};
+      await addUpdateLog("cat_status", `「${name}」のステータスが「${sl[data.status]||data.status}」になりました`);
+    } else {
+      await addUpdateLog("cat_update", `「${name}」の情報が更新されました`);
+    }
+    await loadUpdates();
     window.cancelCatEdit();
     renderGrid();
   } catch(e) {
@@ -728,17 +743,80 @@ window.saveEvent = async () => {
       events.push({ id, ...data });
     }
     showToast(`「${title}」を${editingEventId?"更新":"登録"}しました ✅`);
+    // 更新ログを自動記録
+    if (!editingEventId) {
+      await addUpdateLog("event_new", `新しい譲渡会が登録されました「${title}」（${formatDate(date)} / ${data.place||""}）`);
+    } else {
+      await addUpdateLog("event_update", `譲渡会の情報が更新されました「${title}」`);
+    }
+    await loadUpdates();
     window.cancelEventEdit();
     renderSchedule();
   } catch(e) { showToast("保存に失敗しました","error"); }
   finally { showLoading(false); }
 };
 
-// ─── Init ────────────────────────────────────────────────
+// ─── 更新履歴 ────────────────────────────────────────────
+const UPDATE_ICON = {
+  cat_new:      "🐱",
+  cat_update:   "📝",
+  cat_status:   "🎉",
+  cat_hidden:   "👋",
+  event_new:    "📅",
+  event_update: "🗓️"
+};
+
+async function addUpdateLog(type, message) {
+  try {
+    const id   = `log_${Date.now()}`;
+    const data = { type, message, createdAt: new Date().toISOString() };
+    await setDoc(doc(db, "updates", id), data);
+  } catch(e) { /* ログ失敗はサイレントに */ }
+}
+
+async function loadUpdates() {
+  try {
+    const snap = await getDocs(collection(db, "updates"));
+    const logs = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .sort((a,b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, 10); // 最新10件のみ表示
+    renderUpdates(logs);
+  } catch(e) { /* 読み込み失敗は無視 */ }
+}
+
+function renderUpdates(logs) {
+  const wrap = document.getElementById("updatesList");
+  if (!wrap) return;
+  if (!logs.length) {
+    wrap.innerHTML = '<div style="text-align:center;color:var(--text-light);font-size:13px;padding:20px;">まだ更新情報はありません</div>';
+    return;
+  }
+  wrap.innerHTML = logs.map(log => {
+    const icon = UPDATE_ICON[log.type] || "📌";
+    const dt   = log.createdAt ? formatDateTime(log.createdAt) : "";
+    return `
+      <div class="update-item">
+        <div class="update-icon">${icon}</div>
+        <div class="update-body">
+          <div class="update-message">${log.message}</div>
+          <div class="update-time">${dt}</div>
+        </div>
+      </div>`;
+  }).join("");
+}
+
+function formatDateTime(iso) {
+  try {
+    const d = new Date(iso);
+    const dows = ["日","月","火","水","木","金","土"];
+    return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")}（${dows[d.getDay()]}）${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+  } catch { return ""; }
+}
 (async () => {
   showLoading(true);
   try {
-    await Promise.all([loadCats(), loadEvents()]);
+    await Promise.all([loadCats(), loadEvents(), loadUpdates()]);
   } catch(e) {
     showToast("データの読み込みに失敗しました","error");
   } finally {
@@ -980,7 +1058,18 @@ footer p{font-size:10px;color:rgba(255,255,255,.38);}
 .cat-select-thumb{width:32px;height:32px;border-radius:5px;object-fit:cover;flex-shrink:0;background:var(--sand);display:flex;align-items:center;justify-content:center;font-size:14px;}
 .cat-select-name{font-size:11px;color:var(--brown);font-weight:500;}
 
-/* TOAST */
+/* UPDATES */
+.updates-section{background:var(--cream);padding:56px 40px;border-top:2px solid var(--sand);}
+.updates-inner{max-width:760px;margin:0 auto;}
+.update-item{display:flex;align-items:flex-start;gap:14px;padding:14px 0;border-bottom:1px solid var(--sand);}
+.update-item:last-child{border-bottom:none;}
+.update-icon{font-size:22px;flex-shrink:0;width:36px;height:36px;background:var(--warm-white);border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px var(--shadow);}
+.update-body{flex:1;min-width:0;}
+.update-message{font-size:13px;color:var(--text-dark);line-height:1.6;margin-bottom:3px;}
+.update-time{font-size:11px;color:var(--text-light);letter-spacing:0.06em;}
+@media(max-width:768px){
+  .updates-section{padding:40px 16px;}
+}
 .toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--brown);color:white;padding:11px 22px;border-radius:100px;font-size:13px;opacity:0;transition:all .3s;z-index:999;pointer-events:none;white-space:nowrap;}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 .toast.toast-error{background:#c55;}
@@ -1059,6 +1148,7 @@ footer p{font-size:10px;color:rgba(255,255,255,.38);}
   </a>
   <div class="header-right">
     <nav>
+      <a href="#updates">更新情報</a>
       <a href="#cats">猫を探す</a>
       <a href="#schedule">譲渡会</a>
       <a href="#about">活動について</a>
@@ -1080,6 +1170,17 @@ footer p{font-size:10px;color:rgba(255,255,255,.38);}
     <a href="#schedule" class="btn-outline">📅 譲渡会の予定を見る</a>
   </div>
 </section>
+
+<!-- UPDATES -->
+<div class="updates-section" id="updates">
+  <div class="updates-inner">
+    <div class="section-header" style="margin-bottom:28px;">
+      <div class="section-tag">Latest Updates</div>
+      <h2 class="section-title">最新の更新情報<span>猫の登録・譲渡会情報が更新されると自動で表示されます</span></h2>
+    </div>
+    <div id="updatesList"><div style="text-align:center;color:var(--text-light);font-size:13px;padding:20px;">読み込み中...</div></div>
+  </div>
+</div>
 
 <!-- CATS -->
 <section class="section" id="cats">
