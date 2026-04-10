@@ -1,0 +1,1213 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>愛すべき野良猫の会 | 保護猫譲渡会</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@300;400;500;700&family=Shippori+Mincho:wght@400;600&display=swap" rel="stylesheet">
+
+<!-- Firebase SDK -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getFirestore, collection, doc, getDocs, setDoc, deleteDoc, query, orderBy }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+// ─── Firebase 設定 ───────────────────────────────────────
+const firebaseConfig = {
+  apiKey: "AIzaSyDzhZ9UlGmsyAoR081KTkBO-dkb3CazfW0",
+  authDomain: "lovelystraycatassociation01.firebaseapp.com",
+  projectId: "lovelystraycatassociation01",
+  storageBucket: "lovelystraycatassociation01.firebasestorage.app",
+  messagingSenderId: "709655337535",
+  appId: "1:709655337535:web:bc6b300c3f0b61fd44368a"
+};
+
+// ─── Cloudinary 設定 ─────────────────────────────────────
+const CLOUD_NAME   = "dxzhdprmu";
+const UPLOAD_PRESET = "NoraNeko_Upload";
+
+// ─── 初期化 ─────────────────────────────────────────────
+const app  = initializeApp(firebaseConfig);
+const db   = getFirestore(app);
+const auth = getAuth(app);
+
+// ─── State ──────────────────────────────────────────────
+let cats   = [];
+let events = [];
+let currentUser   = null;
+let currentFilter = "all";
+let editingCatId  = null;
+let editingEventId = null;
+
+// ─── Firestore CRUD ─────────────────────────────────────
+async function loadCats() {
+  const snap = await getDocs(collection(db, "cats"));
+  cats = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  renderGrid();
+}
+async function loadEvents() {
+  const snap = await getDocs(collection(db, "events"));
+  events = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  renderSchedule();
+}
+async function saveCatToDb(id, data) {
+  await setDoc(doc(db, "cats", id), data);
+}
+async function deleteCatFromDb(id) {
+  await deleteDoc(doc(db, "cats", id));
+}
+async function saveEventToDb(id, data) {
+  await setDoc(doc(db, "events", id), data);
+}
+async function deleteEventFromDb(id) {
+  await deleteDoc(doc(db, "events", id));
+}
+
+// ─── Cloudinary アップロード ─────────────────────────────
+async function uploadToCloudinary(file) {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("upload_preset", UPLOAD_PRESET);
+  fd.append("folder", "neko_site");
+  showToast("📤 写真をアップロード中...", "info", 0);
+  const res  = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`, { method:"POST", body:fd });
+  const json = await res.json();
+  if (!json.secure_url) throw new Error("アップロード失敗");
+  return json.secure_url;
+}
+
+// ─── Auth ────────────────────────────────────────────────
+onAuthStateChanged(auth, user => {
+  currentUser = user;
+  updateAuthUI();
+});
+
+function updateAuthUI() {
+  const btnAdmin  = document.getElementById("btnAdmin");
+  const loginArea = document.getElementById("loginArea");
+  if (currentUser) {
+    btnAdmin.textContent  = "⚙ 管理";
+    btnAdmin.style.background = "var(--brown)";
+    loginArea.innerHTML = `<span style="font-size:11px;color:var(--text-light);margin-right:8px;">${currentUser.email}</span>
+      <button onclick="doSignOut()" style="font-size:11px;background:none;border:1px solid var(--sand);border-radius:6px;padding:4px 10px;cursor:pointer;color:var(--text-mid);">ログアウト</button>`;
+  } else {
+    loginArea.innerHTML = "";
+  }
+}
+
+window.doSignOut = async () => {
+  await signOut(auth);
+  showToast("ログアウトしました", "info");
+};
+
+// ─── Helpers ────────────────────────────────────────────
+const statusLabel = { available:"募集中", pending:"応募検討中", adopted:"譲渡済み" };
+
+function vc(done, label) {
+  return `<div class="vc ${done?"done":"pend"}"><div class="dot"></div>${label}${done?"済":"未"}</div>`;
+}
+
+function catPhotoHTML(cat, cls, h) {
+  const fb = (cat.breed||"猫").charAt(0);
+  if (cat.img) {
+    return `<img class="${cls}" src="${cat.img}" alt="${cat.name}" style="height:${h}px;"
+      onerror="this.outerHTML='<div class=\\'cat-photo-placeholder\\' style=\\'height:${h}px\\'>${fb}</div>'" loading="lazy">`;
+  }
+  return `<div class="cat-photo-placeholder" style="height:${h}px;">${fb}</div>`;
+}
+
+function thumbHTML(cat, w, h, r) {
+  const fb = (cat.breed||"猫").charAt(0);
+  const sz = Math.round(w * 0.44);
+  if (cat.img) {
+    return `<img style="width:${w}px;height:${h}px;border-radius:${r};object-fit:cover;flex-shrink:0;"
+      src="${cat.img}" onerror="this.outerHTML='<div style=\\'width:${w}px;height:${h}px;border-radius:${r};background:var(--sand);display:flex;align-items:center;justify-content:center;font-size:${sz}px;flex-shrink:0;\\'>${fb}</div>'">`;
+  }
+  return `<div style="width:${w}px;height:${h}px;border-radius:${r};background:var(--sand);display:flex;align-items:center;justify-content:center;font-size:${sz}px;flex-shrink:0;">${fb}</div>`;
+}
+
+function formatDate(s) {
+  if (!s) return "";
+  const d = new Date(s+"T00:00:00");
+  const dw = ["日","月","火","水","木","金","土"];
+  return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日（${dw[d.getDay()]}）`;
+}
+function getMonth(s) { return s ? `${new Date(s+"T00:00:00").getMonth()+1}月` : ""; }
+function getDay(s)   { return s ? new Date(s+"T00:00:00").getDate() : ""; }
+function getDow(s)   { return s ? ["日","月","火","水","木","金","土"][new Date(s+"T00:00:00").getDay()] : ""; }
+function getYear(s)  { return s ? new Date(s+"T00:00:00").getFullYear()+"年" : ""; }
+function isPast(s)   { return s && new Date(s+"T23:59:59") < new Date(); }
+
+function showToast(msg, type="success", duration=2800) {
+  let t = document.getElementById("toast");
+  if (!t) { t = document.createElement("div"); t.id="toast"; document.body.appendChild(t); }
+  t.textContent = msg;
+  t.className = `toast toast-${type} show`;
+  if (duration > 0) setTimeout(() => t.classList.remove("show"), duration);
+}
+
+function showLoading(show) {
+  document.getElementById("loadingOverlay").style.display = show ? "flex" : "none";
+}
+
+// ─── Public: Cat Grid ────────────────────────────────────
+window.filterCats = (type, btn) => {
+  document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  currentFilter = type;
+  renderGrid();
+};
+
+function renderGrid() {
+  const grid = document.getElementById("catGrid");
+  let list = cats.filter(c => c.visible !== false);
+  if (currentFilter === "female")    list = list.filter(c => c.gender === "female");
+  else if (currentFilter === "male") list = list.filter(c => c.gender === "male");
+  else if (currentFilter === "kitten")    list = list.filter(c => c.ageGroup === "kitten");
+  else if (currentFilter === "adult")     list = list.filter(c => c.ageGroup === "adult");
+  else if (currentFilter === "available") list = list.filter(c => c.status === "available");
+  if (!list.length) {
+    grid.innerHTML = '<div class="empty-state"><div class="icon">🐾</div>該当する子がいません</div>';
+    return;
+  }
+  grid.innerHTML = "";
+  list.forEach((cat, i) => {
+    const card = document.createElement("div");
+    card.className = "cat-card";
+    card.style.animationDelay = `${i * 0.06}s`;
+    const sc = (cat.comment||"").length > 44 ? cat.comment.slice(0,44)+"…" : (cat.comment||"");
+    card.innerHTML = `
+      <div class="cat-photo-wrap">
+        ${catPhotoHTML(cat,"cat-photo",210)}
+        <div class="cat-badge ${cat.gender}">${cat.gender==="female"?"♀ 女の子":"♂ 男の子"}</div>
+        <div class="cat-status ${cat.status}">${statusLabel[cat.status]||cat.status}</div>
+      </div>
+      <div class="cat-body">
+        <div class="cat-name">${cat.name}</div>
+        <div class="cat-name-ruby">${cat.ruby||""} ／ ${cat.breed} ／ ${cat.age}</div>
+        <div class="cat-tags">
+          ${(cat.personality||[]).map(p=>`<span class="tag personality">${p}</span>`).join("")}
+          ${(cat.tags||[]).map(t=>`<span class="tag">${t}</span>`).join("")}
+        </div>
+        <div class="cat-comment-short">「${sc}」</div>
+        <div class="cat-info-mini">
+          <div class="info-item"><div class="info-label">体重</div><div class="info-value">${cat.weight||"—"}</div></div>
+          <div class="info-item"><div class="info-label">毛色</div><div class="info-value">${cat.color||"—"}</div></div>
+          <div class="info-item"><div class="info-label">保護エリア</div><div class="info-value">${cat.area||"—"}</div></div>
+          <div class="info-item"><div class="info-label">健康</div><div class="info-value">良好</div></div>
+        </div>
+        <div class="vaccine-row">
+          ${vc(cat.vaccine?.triple,"三種混合")}${vc(cat.vaccine?.rabies,"狂犬病")}${vc(cat.vaccine?.leukemia,"白血病")}${vc(cat.neutered,"不妊")}${vc(cat.microchip,"MC")}
+        </div>
+        <button class="btn-detail" onclick="openDetail('${cat.id}')">くわしく見る →</button>
+      </div>`;
+    grid.appendChild(card);
+  });
+}
+
+// ─── Public: Schedule ───────────────────────────────────
+function renderSchedule() {
+  const list = document.getElementById("scheduleList");
+  const evs  = [...events].sort((a,b) => (a.date||"").localeCompare(b.date||""));
+  if (!evs.length) {
+    list.innerHTML = '<div class="no-events">現在、予定されている譲渡会はありません。<br>SNSや公式サイトをご確認ください。</div>';
+    return;
+  }
+  list.innerHTML = "";
+  evs.forEach(ev => {
+    const past = isPast(ev.date);
+    const pCats = (ev.catIds||[]).map(id => cats.find(c => c.id === id)).filter(Boolean);
+    const prev  = pCats.slice(0,4);
+    const more  = pCats.length - 4;
+    const chips = pCats.length
+      ? prev.map(c=>`<span class="event-cat-chip">${c.name}</span>`).join("") + (more>0?`<span class="event-cat-chip more">+${more}頭</span>`:"")
+      : '<span style="font-size:11px;color:var(--text-light);">参加猫は当日発表</span>';
+    const card = document.createElement("div");
+    card.className = "event-card";
+    if (past) card.style.opacity = "0.55";
+    card.innerHTML = `
+      <div class="event-card-inner">
+        <div class="event-date-block">
+          <div class="event-month">${getMonth(ev.date)}</div>
+          <div class="event-day">${getDay(ev.date)}</div>
+          <div class="event-dow">${getDow(ev.date)}</div>
+          <div class="event-year">${getYear(ev.date)}</div>
+          ${past?'<div style="font-size:9px;background:rgba(255,255,255,.15);border-radius:4px;padding:2px 6px;margin-top:4px;">終了</div>':""}
+        </div>
+        <div class="event-info">
+          <div class="event-title">${ev.title}</div>
+          <div class="event-meta">
+            <div class="event-meta-item"><span class="event-meta-icon">🕐</span>${ev.start||""}〜${ev.end||""}</div>
+            <div class="event-meta-item"><span class="event-meta-icon">📍</span>${ev.place||""}</div>
+            ${ev.address?`<div class="event-meta-item"><span class="event-meta-icon">🚌</span>${ev.address}</div>`:""}
+          </div>
+          <div class="event-cats-preview">
+            <span style="font-size:10px;color:var(--text-light);margin-right:4px;align-self:center;">参加猫：</span>${chips}
+          </div>
+        </div>
+        <div class="event-action">
+          <button class="event-detail-btn" onclick="openEventModal('${ev.id}')">詳しく見る →</button>
+        </div>
+      </div>`;
+    list.appendChild(card);
+  });
+}
+
+// ─── Detail modals ───────────────────────────────────────
+window.openDetail = id => {
+  const cat = cats.find(c => c.id === id);
+  if (!cat) return;
+  const fb = (cat.breed||"猫").charAt(0);
+  document.getElementById("detailPhotoWrap").innerHTML = cat.img
+    ? `<img class="modal-photo" src="${cat.img}" alt="${cat.name}" onerror="this.outerHTML='<div class=\\'modal-photo-placeholder\\'>${fb}</div>'">`
+    : `<div class="modal-photo-placeholder">${fb}</div>`;
+  document.getElementById("detailName").textContent = cat.name;
+  document.getElementById("detailRuby").textContent = `${cat.ruby||""} ／ ${cat.breed}`;
+  document.getElementById("detailContent").innerHTML = `
+    <div class="cat-tags" style="margin-bottom:11px;">
+      <span class="cat-badge ${cat.gender}" style="position:static;box-shadow:none;border:1.5px solid #ddd;">${cat.gender==="female"?"♀ 女の子":"♂ 男の子"}</span>
+      <span class="cat-status ${cat.status}" style="position:static;">${statusLabel[cat.status]||cat.status}</span>
+      ${(cat.personality||[]).map(p=>`<span class="tag personality">${p}</span>`).join("")}
+    </div>
+    <div class="cat-comment-short" style="margin-bottom:12px;">「${cat.comment||""}」</div>
+    <div class="cat-info-mini" style="margin-bottom:10px;">
+      <div class="info-item"><div class="info-label">年齢</div><div class="info-value">${cat.age}</div></div>
+      <div class="info-item"><div class="info-label">体重</div><div class="info-value">${cat.weight||"—"}</div></div>
+      <div class="info-item"><div class="info-label">毛色</div><div class="info-value">${cat.color||"—"}</div></div>
+      <div class="info-item"><div class="info-label">保護エリア</div><div class="info-value">${cat.area||"—"}</div></div>
+    </div>
+    <div class="info-item" style="border-radius:7px;margin-bottom:10px;">
+      <div class="info-label">健康状態</div>
+      <div class="info-value" style="font-size:11px;font-weight:400;">${cat.health||"—"}</div>
+    </div>
+    <div class="vaccine-row">${vc(cat.vaccine?.triple,"三種混合")}${vc(cat.vaccine?.rabies,"狂犬病")}${vc(cat.vaccine?.leukemia,"白血病")}${vc(cat.neutered,"不妊手術")}${vc(cat.microchip,"マイクロチップ登録")}</div>
+    <div style="margin-top:10px;">
+      <div class="info-label" style="margin-bottom:4px;">相性タグ</div>
+      <div class="cat-tags">${(cat.tags||[]).map(t=>`<span class="tag">${t}</span>`).join("")}</div>
+    </div>`;
+  document.getElementById("detailApplyBtn").onclick = () => window.open("https://aisubekinoranekonokai-gonmama.jimdosite.com/","_blank");
+  document.getElementById("detailOverlay").classList.add("open");
+  document.body.style.overflow = "hidden";
+};
+window.closeDetail    = () => { document.getElementById("detailOverlay").classList.remove("open"); document.body.style.overflow=""; };
+window.closeDetailBg  = e  => { if(e.target===document.getElementById("detailOverlay")) window.closeDetail(); };
+
+window.openEventModal = id => {
+  const ev = events.find(e => e.id === id);
+  if (!ev) return;
+  document.getElementById("evModalTitle").textContent = ev.title;
+  document.getElementById("evModalMeta").innerHTML = `
+    <div class="event-modal-meta-item">📅 ${formatDate(ev.date)}</div>
+    <div class="event-modal-meta-item">🕐 ${ev.start||""}〜${ev.end||""}</div>
+    <div class="event-modal-meta-item">📍 ${ev.place||""}</div>
+    ${ev.address?`<div class="event-modal-meta-item">🚌 ${ev.address}</div>`:""}`;
+  const pCats = (ev.catIds||[]).map(id => cats.find(c => c.id === id)).filter(Boolean);
+  document.getElementById("evModalCats").innerHTML = pCats.length
+    ? pCats.map(cat=>`
+        <div class="event-cat-card" onclick="closeEventModal();openDetail('${cat.id}')">
+          ${thumbHTML(cat,50,50,"8px")}
+          <div>
+            <div class="event-cat-card-name">${cat.name}</div>
+            <div class="event-cat-card-meta">${cat.breed} / ${cat.gender==="female"?"♀":"♂"} / ${statusLabel[cat.status]||""}</div>
+          </div>
+        </div>`).join("")
+    : '<div class="no-cats-msg">参加猫は当日発表です</div>';
+  document.getElementById("evModalNote").innerHTML = ev.note
+    ? `<div class="event-note-block">📝 ${ev.note}</div>` : "";
+  document.getElementById("eventOverlay").classList.add("open");
+  document.body.style.overflow = "hidden";
+};
+window.closeEventModal   = () => { document.getElementById("eventOverlay").classList.remove("open"); document.body.style.overflow=""; };
+window.closeEventModalBg = e  => { if(e.target===document.getElementById("eventOverlay")) window.closeEventModal(); };
+
+// ─── Admin ───────────────────────────────────────────────
+window.openAdmin = () => {
+  if (!currentUser) {
+    document.getElementById("loginOverlay").classList.add("open");
+    document.body.style.overflow = "hidden";
+    return;
+  }
+  openAdminPanel();
+};
+
+function openAdminPanel() {
+  renderAdminCats();
+  renderAdminEvents();
+  document.getElementById("adminOverlay").classList.add("open");
+  document.body.style.overflow = "hidden";
+}
+
+window.closeAdmin    = () => { document.getElementById("adminOverlay").classList.remove("open"); document.body.style.overflow=""; };
+window.closeAdminBg  = e  => { if(e.target===document.getElementById("adminOverlay")) window.closeAdmin(); };
+
+window.switchTab = (name, btn) => {
+  document.querySelectorAll(".admin-tab").forEach(t => t.classList.remove("active"));
+  document.querySelectorAll(".tab-content").forEach(t => t.classList.remove("active"));
+  btn.classList.add("active");
+  document.getElementById("tab-"+name).classList.add("active");
+  if (name === "catform")   { resetCatForm(); }
+  if (name === "eventform") { resetEventForm(); renderCatSelector([]); }
+};
+
+// ── Admin: ログイン ──
+window.doLogin = async () => {
+  const email = document.getElementById("loginEmail").value.trim();
+  const pass  = document.getElementById("loginPass").value;
+  if (!email || !pass) { showToast("メールアドレスとパスワードを入力してください","error"); return; }
+  try {
+    showLoading(true);
+    await signInWithEmailAndPassword(auth, email, pass);
+    document.getElementById("loginOverlay").classList.remove("open");
+    document.getElementById("loginEmail").value = "";
+    document.getElementById("loginPass").value  = "";
+    showToast("ログインしました ✅");
+    openAdminPanel();
+  } catch(e) {
+    showToast("ログインに失敗しました。メールアドレスとパスワードを確認してください","error");
+  } finally {
+    showLoading(false);
+  }
+};
+window.closeLoginOverlay   = () => { document.getElementById("loginOverlay").classList.remove("open"); document.body.style.overflow=""; };
+window.closeLoginOverlayBg = e  => { if(e.target===document.getElementById("loginOverlay")) window.closeLoginOverlay(); };
+
+// ── Admin: 猫リスト ──
+function renderAdminCats() {
+  const list = document.getElementById("adminCatList");
+  list.innerHTML = "";
+  cats.forEach(cat => {
+    const item = document.createElement("div");
+    item.className = "admin-cat-item";
+    const th = cat.img
+      ? `<img class="admin-cat-thumb" src="${cat.img}" onerror="this.outerHTML='<div class=\\'admin-cat-thumb-ph\\'>${(cat.name||"?").charAt(0)}</div>'">`
+      : `<div class="admin-cat-thumb-ph">${(cat.name||"?").charAt(0)}</div>`;
+    const vis = cat.visible !== false;
+    item.innerHTML = `
+      ${th}
+      <div class="admin-cat-info">
+        <div class="admin-cat-name">${cat.name} <span style="font-size:9px;color:var(--text-light);">${cat.ruby||""}</span></div>
+        <div class="admin-cat-meta">${cat.breed} ／ ${cat.age} ／ ${cat.gender==="female"?"♀":"♂"} ／ ${statusLabel[cat.status]||cat.status}</div>
+      </div>
+      <div class="admin-cat-actions">
+        <button class="abtn ${vis?"vis-on":"vis-off"}" onclick="toggleCatVis('${cat.id}')">${vis?"表示中":"非表示"}</button>
+        <button class="abtn edit" onclick="editCat('${cat.id}')">編集</button>
+        <button class="abtn del"  onclick="deleteCat('${cat.id}')">削除</button>
+      </div>`;
+    list.appendChild(item);
+  });
+  document.getElementById("catCount").textContent =
+    `登録数：${cats.length}頭 ／ 公開中：${cats.filter(c=>c.visible!==false).length}頭`;
+}
+
+window.toggleCatVis = async id => {
+  const cat = cats.find(c => c.id === id);
+  if (!cat) return;
+  cat.visible = cat.visible === false ? true : false;
+  await saveCatToDb(id, cat);
+  renderAdminCats(); renderGrid();
+  showToast(`「${cat.name}」を${cat.visible?"表示":"非表示"}にしました`);
+};
+
+window.deleteCat = async id => {
+  const cat = cats.find(c => c.id === id);
+  if (!cat || !confirm(`「${cat.name}」を削除しますか？元に戻せません。`)) return;
+  try {
+    showLoading(true);
+    await deleteCatFromDb(id);
+    cats = cats.filter(c => c.id !== id);
+    renderAdminCats(); renderGrid();
+    showToast(`「${cat.name}」を削除しました`);
+  } catch(e) {
+    showToast("削除に失敗しました","error");
+  } finally { showLoading(false); }
+};
+
+window.editCat = id => {
+  const cat = cats.find(c => c.id === id);
+  if (!cat) return;
+  switchTab("catform", document.querySelectorAll(".admin-tab")[1]);
+  editingCatId = id;
+  document.getElementById("catFormTitle").textContent = `「${cat.name}」を編集`;
+  document.getElementById("f_name").value        = cat.name||"";
+  document.getElementById("f_ruby").value        = cat.ruby||"";
+  document.getElementById("f_breed").value       = cat.breed||"";
+  document.getElementById("f_color").value       = cat.color||"";
+  document.getElementById("f_gender").value      = cat.gender||"female";
+  document.getElementById("f_age").value         = cat.age||"";
+  document.getElementById("f_ageGroup").value    = cat.ageGroup||"adult";
+  document.getElementById("f_weight").value      = cat.weight||"";
+  document.getElementById("f_status").value      = cat.status||"available";
+  document.getElementById("f_area").value        = cat.area||"";
+  document.getElementById("f_personality").value = (cat.personality||[]).join(",");
+  document.getElementById("f_tags").value        = (cat.tags||[]).join(",");
+  document.getElementById("f_comment").value     = cat.comment||"";
+  document.getElementById("f_health").value      = cat.health||"";
+  document.getElementById("f_v_triple").checked  = !!(cat.vaccine?.triple);
+  document.getElementById("f_v_rabies").checked  = !!(cat.vaccine?.rabies);
+  document.getElementById("f_v_leukemia").checked= !!(cat.vaccine?.leukemia);
+  document.getElementById("f_neutered").checked  = !!cat.neutered;
+  document.getElementById("f_microchip").checked = !!cat.microchip;
+  // 画像プレビュー
+  document.getElementById("f_imgUrl").value = cat.img||"";
+  if (cat.img) showImgPreview(cat.img); else hideImgPreview();
+  _pendingImgFile = null;
+};
+
+function resetCatForm() {
+  editingCatId = null;
+  document.getElementById("catFormTitle").textContent = "新しい子を登録";
+  ["f_name","f_ruby","f_breed","f_color","f_age","f_weight","f_area",
+   "f_personality","f_tags","f_comment","f_health","f_imgUrl"].forEach(id => document.getElementById(id).value="");
+  document.getElementById("f_gender").value   = "female";
+  document.getElementById("f_ageGroup").value = "adult";
+  document.getElementById("f_status").value   = "available";
+  ["f_v_triple","f_v_rabies","f_v_leukemia","f_neutered","f_microchip"].forEach(id => document.getElementById(id).checked=false);
+  _pendingImgFile = null;
+  hideImgPreview();
+}
+
+window.cancelCatEdit = () => { resetCatForm(); switchTab("cats", document.querySelectorAll(".admin-tab")[0]); renderAdminCats(); };
+
+window.saveCat = async () => {
+  const name = document.getElementById("f_name").value.trim();
+  if (!name) { showToast("名前を入力してください","error"); return; }
+  try {
+    showLoading(true);
+    let imgUrl = document.getElementById("f_imgUrl").value.trim();
+    // ローカルファイルが選ばれていればCloudinaryへアップロード
+    if (_pendingImgFile) {
+      imgUrl = await uploadToCloudinary(_pendingImgFile);
+    }
+    const id   = editingCatId || `cat_${Date.now()}`;
+    const data = {
+      name, ruby: document.getElementById("f_ruby").value.trim(),
+      img: imgUrl,
+      gender:    document.getElementById("f_gender").value,
+      age:       document.getElementById("f_age").value.trim()||"不明",
+      ageGroup:  document.getElementById("f_ageGroup").value,
+      breed:     document.getElementById("f_breed").value.trim()||"不明",
+      color:     document.getElementById("f_color").value.trim(),
+      weight:    document.getElementById("f_weight").value.trim(),
+      personality: document.getElementById("f_personality").value.split(",").map(s=>s.trim()).filter(Boolean),
+      tags:        document.getElementById("f_tags").value.split(",").map(s=>s.trim()).filter(Boolean),
+      comment:   document.getElementById("f_comment").value.trim(),
+      status:    document.getElementById("f_status").value,
+      vaccine: {
+        triple:   document.getElementById("f_v_triple").checked,
+        rabies:   document.getElementById("f_v_rabies").checked,
+        leukemia: document.getElementById("f_v_leukemia").checked
+      },
+      neutered:  document.getElementById("f_neutered").checked,
+      microchip: document.getElementById("f_microchip").checked,
+      health:    document.getElementById("f_health").value.trim(),
+      area:      document.getElementById("f_area").value.trim(),
+      visible:   true
+    };
+    await saveCatToDb(id, data);
+    if (editingCatId) {
+      const idx = cats.findIndex(c => c.id === editingCatId);
+      if (idx >= 0) cats[idx] = { id, ...data };
+    } else {
+      cats.push({ id, ...data });
+    }
+    showToast(`「${name}」を${editingCatId?"更新":"登録"}しました ✅`);
+    window.cancelCatEdit();
+    renderGrid();
+  } catch(e) {
+    showToast("保存に失敗しました: "+e.message, "error");
+  } finally { showLoading(false); }
+};
+
+// ── 画像入力 ──
+let _pendingImgFile = null;
+
+window.handleImgFile = input => {
+  const file = input.files[0];
+  if (!file) return;
+  _pendingImgFile = file;
+  document.getElementById("f_imgUrl").value = "";
+  const reader = new FileReader();
+  reader.onload = e => showImgPreview(e.target.result);
+  reader.readAsDataURL(file);
+};
+window.handleImgUrl = url => {
+  _pendingImgFile = null;
+  document.getElementById("f_imgFile").value = "";
+  if (url) showImgPreview(url); else hideImgPreview();
+};
+window.clearImg = () => {
+  _pendingImgFile = null;
+  document.getElementById("f_imgUrl").value  = "";
+  document.getElementById("f_imgFile").value = "";
+  hideImgPreview();
+};
+function showImgPreview(src) {
+  document.getElementById("imgPreview").src = src;
+  document.getElementById("imgPreviewWrap").style.display = "block";
+}
+function hideImgPreview() {
+  document.getElementById("imgPreviewWrap").style.display = "none";
+  document.getElementById("imgPreview").src = "";
+}
+
+// ── Admin: イベントリスト ──
+function renderAdminEvents() {
+  const list = document.getElementById("adminEventList");
+  list.innerHTML = "";
+  const evs = [...events].sort((a,b)=>(a.date||"").localeCompare(b.date||""));
+  evs.forEach(ev => {
+    const past = isPast(ev.date);
+    const item = document.createElement("div");
+    item.className = "admin-event-item";
+    item.innerHTML = `
+      <div class="admin-event-date-block" style="${past?"opacity:.5":""}">
+        <div class="m">${getMonth(ev.date)}</div>
+        <div class="d">${getDay(ev.date)}</div>
+        <div class="m">${getDow(ev.date)}</div>
+      </div>
+      <div class="admin-event-info">
+        <div class="admin-event-title">${ev.title}${past?' <span style="font-size:9px;background:#eee;border-radius:3px;padding:1px 5px;color:#999;">終了</span>':""}</div>
+        <div class="admin-event-meta">${ev.place||""} ／ ${ev.start||""}〜${ev.end||""} ／ 参加猫：${(ev.catIds||[]).length}頭</div>
+      </div>
+      <div class="admin-event-actions">
+        <button class="abtn edit" onclick="editEvent('${ev.id}')">編集</button>
+        <button class="abtn del"  onclick="deleteEvent('${ev.id}')">削除</button>
+      </div>`;
+    list.appendChild(item);
+  });
+  document.getElementById("eventCount").textContent = `登録数：${events.length}件`;
+}
+
+window.deleteEvent = async id => {
+  const ev = events.find(e => e.id === id);
+  if (!ev || !confirm(`「${ev.title}」を削除しますか？`)) return;
+  try {
+    showLoading(true);
+    await deleteEventFromDb(id);
+    events = events.filter(e => e.id !== id);
+    renderAdminEvents(); renderSchedule();
+    showToast("削除しました");
+  } catch(e) { showToast("削除に失敗しました","error"); }
+  finally { showLoading(false); }
+};
+
+window.editEvent = id => {
+  const ev = events.find(e => e.id === id);
+  if (!ev) return;
+  switchTab("eventform", document.querySelectorAll(".admin-tab")[3]);
+  renderCatSelector(ev.catIds||[]);
+  editingEventId = id;
+  document.getElementById("eventFormTitle").textContent = `「${ev.title}」を編集`;
+  document.getElementById("ev_title").value   = ev.title||"";
+  document.getElementById("ev_date").value    = ev.date||"";
+  document.getElementById("ev_start").value   = ev.start||"12:00";
+  document.getElementById("ev_end").value     = ev.end||"15:00";
+  document.getElementById("ev_place").value   = ev.place||"";
+  document.getElementById("ev_address").value = ev.address||"";
+  document.getElementById("ev_note").value    = ev.note||"";
+};
+
+function resetEventForm() {
+  editingEventId = null;
+  document.getElementById("eventFormTitle").textContent = "新しい譲渡会を登録";
+  ["ev_title","ev_date","ev_place","ev_address","ev_note"].forEach(id => document.getElementById(id).value="");
+  document.getElementById("ev_start").value = "12:00";
+  document.getElementById("ev_end").value   = "15:00";
+  renderCatSelector([]);
+}
+
+window.cancelEventEdit = () => {
+  resetEventForm();
+  switchTab("events", document.querySelectorAll(".admin-tab")[2]);
+  renderAdminEvents();
+};
+
+function renderCatSelector(selectedIds=[]) {
+  const sel = document.getElementById("catSelector");
+  sel.innerHTML = "";
+  cats.forEach(cat => {
+    const checked = selectedIds.includes(cat.id);
+    const item = document.createElement("label");
+    item.className = "cat-select-item" + (checked?" selected":"");
+    const fb = (cat.breed||"猫").charAt(0);
+    const th = cat.img
+      ? `<img class="cat-select-thumb" src="${cat.img}" onerror="this.outerHTML='<div class=\\'cat-select-thumb\\'>${fb}</div>'">`
+      : `<div class="cat-select-thumb">${fb}</div>`;
+    item.innerHTML = `<input type="checkbox" value="${cat.id}" ${checked?"checked":""}>${th}<div class="cat-select-name">${cat.name}</div>`;
+    item.querySelector("input").addEventListener("change", e => item.classList.toggle("selected", e.target.checked));
+    sel.appendChild(item);
+  });
+}
+
+window.saveEvent = async () => {
+  const title = document.getElementById("ev_title").value.trim();
+  const date  = document.getElementById("ev_date").value;
+  if (!title) { showToast("タイトルを入力してください","error"); return; }
+  if (!date)  { showToast("開催日を選択してください","error"); return; }
+  const selectedCatIds = [...document.querySelectorAll("#catSelector input[type=checkbox]:checked")].map(cb => cb.value);
+  const id   = editingEventId || `ev_${Date.now()}`;
+  const data = {
+    title, date,
+    start:   document.getElementById("ev_start").value,
+    end:     document.getElementById("ev_end").value,
+    place:   document.getElementById("ev_place").value.trim(),
+    address: document.getElementById("ev_address").value.trim(),
+    note:    document.getElementById("ev_note").value.trim(),
+    catIds:  selectedCatIds
+  };
+  try {
+    showLoading(true);
+    await saveEventToDb(id, data);
+    if (editingEventId) {
+      const idx = events.findIndex(e => e.id === editingEventId);
+      if (idx >= 0) events[idx] = { id, ...data };
+    } else {
+      events.push({ id, ...data });
+    }
+    showToast(`「${title}」を${editingEventId?"更新":"登録"}しました ✅`);
+    window.cancelEventEdit();
+    renderSchedule();
+  } catch(e) { showToast("保存に失敗しました","error"); }
+  finally { showLoading(false); }
+};
+
+// ─── Init ────────────────────────────────────────────────
+(async () => {
+  showLoading(true);
+  try {
+    await Promise.all([loadCats(), loadEvents()]);
+  } catch(e) {
+    showToast("データの読み込みに失敗しました","error");
+  } finally {
+    showLoading(false);
+  }
+})();
+</script>
+
+<style>
+:root{
+  --cream:#fdf8f2;--warm-white:#fffcf8;--sand:#f0e6d3;
+  --caramel:#c8956c;--terracotta:#b5704a;--brown:#7a4f35;
+  --sage:#8fa688;--sage-light:#c8d9c4;
+  --text-dark:#3d2b1f;--text-mid:#6b4c3b;--text-light:#9e7b6a;
+  --shadow:rgba(120,80,50,0.12);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--cream);color:var(--text-dark);font-family:'Zen Maru Gothic',sans-serif;line-height:1.7;overflow-x:hidden;}
+
+/* HEADER */
+header{background:var(--warm-white);border-bottom:2px solid var(--sand);padding:0 36px;position:sticky;top:0;z-index:100;display:flex;align-items:center;justify-content:space-between;height:68px;}
+.logo{display:flex;align-items:center;gap:11px;text-decoration:none;}
+.logo-icon{width:42px;height:42px;background:var(--caramel);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;}
+.logo-text .main{font-family:'Shippori Mincho',serif;font-size:16px;font-weight:600;color:var(--brown);letter-spacing:0.06em;}
+.logo-text .sub{font-size:9px;color:var(--text-light);letter-spacing:0.14em;}
+.header-right{display:flex;gap:12px;align-items:center;}
+nav{display:flex;gap:20px;align-items:center;}
+nav a{text-decoration:none;font-size:13px;color:var(--text-mid);letter-spacing:0.07em;transition:color .25s;}
+nav a:hover{color:var(--caramel);}
+.btn-admin{background:var(--brown);color:white;padding:8px 16px;border-radius:100px;font-size:12px;letter-spacing:0.08em;cursor:pointer;border:none;font-family:'Zen Maru Gothic',sans-serif;transition:background .25s;}
+.btn-admin:hover{background:var(--terracotta);}
+
+/* HERO */
+.hero{background:linear-gradient(155deg,#fff9f4 0%,#f5ece0 55%,#ede0d0 100%);padding:68px 40px 86px;text-align:center;position:relative;overflow:hidden;}
+.hero::before{content:'';position:absolute;top:-60px;right:-60px;width:280px;height:280px;background:radial-gradient(circle,rgba(200,149,108,.12),transparent 70%);border-radius:50%;}
+.hero-badge{display:inline-block;background:var(--sage-light);color:var(--sage);font-size:11px;letter-spacing:0.2em;padding:5px 18px;border-radius:100px;margin-bottom:18px;animation:fadeUp .8s ease both;}
+.hero h1{font-family:'Shippori Mincho',serif;font-size:clamp(28px,5vw,50px);font-weight:600;color:var(--brown);letter-spacing:0.06em;line-height:1.35;margin-bottom:14px;animation:fadeUp .8s .1s ease both;}
+.hero h1 span{color:var(--caramel);}
+.hero p{font-size:13px;color:var(--text-mid);max-width:460px;margin:0 auto 10px;animation:fadeUp .8s .14s ease both;}
+.hero .org-link{font-size:11px;color:var(--text-light);display:block;margin-bottom:26px;animation:fadeUp .8s .18s ease both;}
+.hero .org-link a{color:var(--caramel);text-decoration:none;}
+.hero .org-link a:hover{text-decoration:underline;}
+.hero-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;animation:fadeUp .8s .22s ease both;}
+.btn-primary{background:var(--caramel);color:white;padding:12px 28px;border-radius:100px;font-family:'Zen Maru Gothic',sans-serif;font-size:13px;border:none;cursor:pointer;letter-spacing:0.1em;box-shadow:0 5px 18px rgba(200,149,108,.42);transition:background .3s,transform .2s;text-decoration:none;display:inline-block;}
+.btn-primary:hover{background:var(--terracotta);transform:translateY(-2px);}
+.btn-outline{background:transparent;color:var(--caramel);padding:10px 24px;border-radius:100px;font-family:'Zen Maru Gothic',sans-serif;font-size:13px;border:2px solid var(--caramel);cursor:pointer;letter-spacing:0.1em;transition:all .25s;text-decoration:none;display:inline-block;}
+.btn-outline:hover{background:var(--sand);}
+
+/* SECTION */
+.section{padding:68px 40px;max-width:1100px;margin:0 auto;}
+.section-header{text-align:center;margin-bottom:44px;}
+.section-tag{display:inline-block;font-size:10px;letter-spacing:0.25em;color:var(--caramel);text-transform:uppercase;margin-bottom:9px;}
+.section-title{font-family:'Shippori Mincho',serif;font-size:26px;font-weight:600;color:var(--brown);letter-spacing:0.06em;}
+.section-title span{font-size:12px;color:var(--text-light);display:block;font-family:'Zen Maru Gothic',sans-serif;font-weight:400;margin-top:5px;letter-spacing:0.14em;}
+
+/* SCHEDULE */
+.schedule-section{background:var(--warm-white);padding:68px 40px;border-top:2px solid var(--sand);border-bottom:2px solid var(--sand);}
+.schedule-inner{max-width:1100px;margin:0 auto;}
+.schedule-list{display:flex;flex-direction:column;gap:20px;}
+.event-card{background:white;border-radius:18px;overflow:hidden;box-shadow:0 3px 16px var(--shadow);transition:transform .25s,box-shadow .25s;}
+.event-card:hover{transform:translateY(-3px);box-shadow:0 10px 30px rgba(120,80,50,.16);}
+.event-card-inner{display:grid;grid-template-columns:180px 1fr auto;align-items:center;}
+.event-date-block{background:var(--brown);color:white;padding:24px 20px;text-align:center;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;}
+.event-month{font-size:11px;letter-spacing:0.2em;color:rgba(255,255,255,.6);}
+.event-day{font-family:'Shippori Mincho',serif;font-size:36px;font-weight:600;line-height:1;}
+.event-dow{font-size:13px;color:var(--caramel);}
+.event-year{font-size:10px;color:rgba(255,255,255,.5);margin-top:2px;}
+.event-info{padding:20px 24px;}
+.event-title{font-family:'Shippori Mincho',serif;font-size:18px;color:var(--brown);margin-bottom:6px;}
+.event-meta{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px;}
+.event-meta-item{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-mid);}
+.event-meta-icon{font-size:13px;}
+.event-cats-preview{display:flex;gap:6px;flex-wrap:wrap;}
+.event-cat-chip{background:var(--sand);color:var(--text-mid);font-size:11px;padding:3px 10px;border-radius:100px;}
+.event-cat-chip.more{background:var(--caramel);color:white;}
+.event-action{padding:20px 24px 20px 0;}
+.event-detail-btn{background:var(--sand);color:var(--text-mid);border:none;padding:10px 18px;border-radius:10px;font-family:'Zen Maru Gothic',sans-serif;font-size:12px;cursor:pointer;transition:all .2s;white-space:nowrap;}
+.event-detail-btn:hover{background:var(--caramel);color:white;}
+.no-events{text-align:center;padding:48px;color:var(--text-light);font-size:14px;}
+
+/* FILTER */
+.filter-bar{display:flex;gap:7px;justify-content:center;flex-wrap:wrap;margin-bottom:36px;}
+.filter-btn{padding:6px 16px;border-radius:100px;border:1.5px solid var(--sand);background:white;font-family:'Zen Maru Gothic',sans-serif;font-size:12px;color:var(--text-mid);cursor:pointer;transition:all .2s;}
+.filter-btn:hover,.filter-btn.active{background:var(--caramel);border-color:var(--caramel);color:white;}
+
+/* CAT GRID */
+.cat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:22px;}
+.empty-state{text-align:center;padding:56px 20px;color:var(--text-light);font-size:14px;grid-column:1/-1;}
+.empty-state .icon{font-size:44px;margin-bottom:10px;}
+.cat-card{background:var(--warm-white);border-radius:18px;overflow:hidden;box-shadow:0 3px 18px var(--shadow);transition:transform .3s,box-shadow .3s;animation:fadeUp .55s ease both;cursor:pointer;}
+.cat-card:hover{transform:translateY(-5px);box-shadow:0 12px 36px rgba(120,80,50,.17);}
+.cat-photo{width:100%;height:210px;object-fit:cover;display:block;}
+.cat-photo-placeholder{width:100%;height:210px;background:var(--sand);display:flex;align-items:center;justify-content:center;font-size:68px;}
+.cat-photo-wrap{position:relative;}
+.cat-badge{position:absolute;top:11px;left:11px;background:white;border-radius:100px;padding:3px 9px;font-size:10px;font-weight:500;box-shadow:0 2px 7px var(--shadow);}
+.cat-badge.female{color:#c07070;}.cat-badge.male{color:#6080b0;}
+.cat-status{position:absolute;top:11px;right:11px;padding:3px 9px;border-radius:100px;font-size:10px;font-weight:500;}
+.cat-status.available{background:#e8f5e4;color:var(--sage);}.cat-status.pending{background:#fff3e0;color:#e0903a;}.cat-status.adopted{background:#eee;color:#999;}
+.cat-body{padding:16px 18px 18px;}
+.cat-name{font-family:'Shippori Mincho',serif;font-size:19px;font-weight:600;color:var(--brown);}
+.cat-name-ruby{font-size:10px;color:var(--text-light);letter-spacing:0.13em;margin-bottom:10px;}
+.cat-tags{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px;}
+.tag{background:var(--sand);color:var(--text-mid);font-size:10px;padding:2px 9px;border-radius:100px;}
+.tag.personality{background:#f0ebe6;}
+.cat-comment-short{font-size:11px;color:var(--text-mid);line-height:1.7;margin-bottom:11px;padding:9px 11px;background:var(--cream);border-radius:9px;border-left:3px solid var(--caramel);}
+.cat-info-mini{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;}
+.info-item{background:var(--cream);border-radius:7px;padding:7px 9px;}
+.info-label{font-size:9px;color:var(--text-light);letter-spacing:0.1em;margin-bottom:1px;}
+.info-value{font-size:11px;font-weight:500;color:var(--text-dark);}
+.vaccine-row{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:12px;}
+.vc{display:flex;align-items:center;gap:3px;font-size:9px;padding:2px 7px;border-radius:4px;}
+.vc.done{background:#e8f5e4;color:#5a8a52;}.vc.pend{background:#fef3e2;color:#c07820;}
+.vc .dot{width:4px;height:4px;border-radius:50%;background:currentColor;flex-shrink:0;}
+.btn-detail{width:100%;background:var(--caramel);color:white;border:none;border-radius:9px;padding:11px;font-family:'Zen Maru Gothic',sans-serif;font-size:12px;letter-spacing:0.1em;cursor:pointer;transition:background .25s;}
+.btn-detail:hover{background:var(--terracotta);}
+
+/* ABOUT */
+.about-section{background:linear-gradient(135deg,#fdf8f2,#f5ece0);padding:68px 40px;}
+.about-inner{max-width:1100px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:52px;align-items:center;}
+.paw-circle{width:280px;height:280px;background:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:110px;box-shadow:0 18px 56px var(--shadow);margin:auto;}
+.about-content h2{font-family:'Shippori Mincho',serif;font-size:24px;color:var(--brown);margin-bottom:13px;letter-spacing:0.06em;line-height:1.5;}
+.about-content p{font-size:13px;color:var(--text-mid);line-height:2;margin-bottom:12px;}
+.about-link{display:inline-block;color:var(--caramel);font-size:12px;text-decoration:none;border-bottom:1px solid var(--caramel);margin-bottom:20px;}
+.about-steps{display:flex;flex-direction:column;gap:12px;}
+.step{display:flex;align-items:flex-start;gap:12px;}
+.step-num{width:30px;height:30px;min-width:30px;background:var(--caramel);color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;}
+.step-text{font-size:12px;color:var(--text-mid);padding-top:4px;line-height:1.6;}
+
+/* FOOTER */
+footer{background:var(--brown);color:rgba(255,255,255,.8);padding:40px;text-align:center;}
+.footer-logo{font-family:'Shippori Mincho',serif;font-size:19px;color:white;letter-spacing:0.1em;margin-bottom:5px;}
+.footer-sub{font-size:10px;color:rgba(255,255,255,.45);letter-spacing:0.18em;margin-bottom:22px;}
+footer a{color:var(--caramel);text-decoration:none;margin:0 12px;font-size:12px;}
+.footer-links{margin-bottom:18px;}
+footer p{font-size:10px;color:rgba(255,255,255,.38);}
+
+/* OVERLAYS */
+.overlay{display:none;position:fixed;inset:0;background:rgba(40,25,15,.55);z-index:200;align-items:center;justify-content:center;padding:20px;}
+.overlay.open{display:flex;}
+
+/* DETAIL MODAL */
+.detail-modal{background:var(--warm-white);border-radius:22px;max-width:520px;width:100%;max-height:90vh;overflow-y:auto;animation:modalIn .32s cubic-bezier(.34,1.5,.64,1) both;}
+.modal-photo{width:100%;height:250px;object-fit:cover;border-radius:22px 22px 0 0;display:block;}
+.modal-photo-placeholder{width:100%;height:250px;border-radius:22px 22px 0 0;background:var(--sand);display:flex;align-items:center;justify-content:center;font-size:76px;}
+.modal-body{padding:22px 26px 26px;}
+.modal-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px;}
+.modal-close{width:32px;height:32px;border-radius:50%;border:none;background:var(--sand);color:var(--text-mid);font-size:15px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .2s;}
+.modal-close:hover{background:var(--caramel);color:white;}
+.modal-apply-btn{width:100%;background:var(--caramel);color:white;border:none;border-radius:11px;padding:13px;font-family:'Zen Maru Gothic',sans-serif;font-size:13px;letter-spacing:0.12em;cursor:pointer;margin-top:18px;box-shadow:0 5px 18px rgba(200,149,108,.38);transition:background .25s;}
+.modal-apply-btn:hover{background:var(--terracotta);}
+
+/* EVENT MODAL */
+.event-modal{background:var(--warm-white);border-radius:22px;max-width:660px;width:100%;max-height:92vh;overflow-y:auto;animation:modalIn .32s cubic-bezier(.34,1.5,.64,1) both;}
+.event-modal-header{background:var(--brown);color:white;padding:22px 26px;border-radius:22px 22px 0 0;display:flex;justify-content:space-between;align-items:flex-start;}
+.event-modal-header h2{font-family:'Shippori Mincho',serif;font-size:20px;letter-spacing:0.06em;line-height:1.4;}
+.event-modal-body{padding:24px 26px 28px;}
+.event-modal-meta{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:22px;padding-bottom:18px;border-bottom:1.5px solid var(--sand);}
+.event-modal-meta-item{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-mid);}
+.event-modal-section-title{font-size:12px;letter-spacing:0.15em;color:var(--caramel);margin-bottom:14px;}
+.event-cats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;}
+.event-cat-card{background:var(--cream);border-radius:12px;overflow:hidden;display:flex;gap:10px;align-items:center;padding:10px;cursor:pointer;transition:background .2s;}
+.event-cat-card:hover{background:var(--sand);}
+.event-cat-card-name{font-weight:500;color:var(--brown);font-size:14px;}
+.event-cat-card-meta{font-size:10px;color:var(--text-light);}
+.event-note-block{margin-top:18px;background:#fff8f0;border:1px solid #f0d8c0;border-radius:10px;padding:12px 14px;font-size:12px;color:var(--text-mid);line-height:1.7;}
+.no-cats-msg{text-align:center;padding:28px;color:var(--text-light);font-size:13px;}
+
+/* LOGIN MODAL */
+.login-modal{background:white;border-radius:20px;max-width:380px;width:100%;padding:32px;animation:modalIn .3s ease both;}
+.login-modal h2{font-family:'Shippori Mincho',serif;font-size:20px;color:var(--brown);margin-bottom:6px;text-align:center;}
+.login-modal p{font-size:12px;color:var(--text-light);text-align:center;margin-bottom:24px;}
+.login-field{display:flex;flex-direction:column;gap:5px;margin-bottom:14px;}
+.login-field label{font-size:11px;color:var(--text-mid);}
+.login-field input{padding:10px 12px;border:1.5px solid var(--sand);border-radius:9px;font-family:'Zen Maru Gothic',sans-serif;font-size:13px;outline:none;transition:border-color .2s;}
+.login-field input:focus{border-color:var(--caramel);}
+.login-btn{width:100%;background:var(--caramel);color:white;border:none;border-radius:10px;padding:13px;font-family:'Zen Maru Gothic',sans-serif;font-size:14px;cursor:pointer;margin-top:8px;transition:background .25s;letter-spacing:0.1em;}
+.login-btn:hover{background:var(--terracotta);}
+.login-cancel{width:100%;background:none;border:none;color:var(--text-light);font-size:12px;cursor:pointer;margin-top:10px;padding:6px;}
+
+/* ADMIN */
+.admin-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.48);z-index:300;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto;}
+.admin-overlay.open{display:flex;}
+.admin-panel{background:white;border-radius:18px;max-width:900px;width:100%;margin:auto;animation:modalIn .28s ease both;}
+.admin-header{background:var(--brown);color:white;padding:16px 24px;border-radius:18px 18px 0 0;display:flex;align-items:center;justify-content:space-between;}
+.admin-header h2{font-family:'Shippori Mincho',serif;font-size:17px;letter-spacing:0.07em;}
+.admin-close-btn{background:rgba(255,255,255,.18);border:none;color:white;width:30px;height:30px;border-radius:50%;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center;}
+.admin-body{padding:20px 24px;}
+.admin-tabs{display:flex;gap:3px;margin-bottom:20px;border-bottom:2px solid var(--sand);}
+.admin-tab{padding:8px 16px;border:none;background:none;font-family:'Zen Maru Gothic',sans-serif;font-size:12px;color:var(--text-mid);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .2s;}
+.admin-tab.active{color:var(--caramel);border-bottom-color:var(--caramel);font-weight:500;}
+.tab-content{display:none;}.tab-content.active{display:block;}
+.notice{background:#fff8f0;border:1px solid #f0d8c0;border-radius:8px;padding:10px 12px;font-size:11px;color:var(--text-mid);margin-bottom:12px;line-height:1.6;}
+.admin-cat-list{display:flex;flex-direction:column;gap:9px;max-height:360px;overflow-y:auto;margin-bottom:14px;}
+.admin-cat-item{display:flex;align-items:center;gap:10px;padding:9px 11px;background:var(--cream);border-radius:10px;border:1.5px solid transparent;transition:border-color .2s;}
+.admin-cat-item:hover{border-color:var(--caramel);}
+.admin-cat-thumb{width:44px;height:44px;border-radius:8px;object-fit:cover;flex-shrink:0;}
+.admin-cat-thumb-ph{width:44px;height:44px;border-radius:8px;background:var(--sand);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;}
+.admin-cat-info{flex:1;min-width:0;}
+.admin-cat-name{font-weight:500;color:var(--brown);font-size:13px;}
+.admin-cat-meta{font-size:10px;color:var(--text-light);}
+.admin-cat-actions{display:flex;gap:4px;flex-shrink:0;}
+.abtn{padding:4px 10px;border-radius:6px;border:none;font-family:'Zen Maru Gothic',sans-serif;font-size:10px;cursor:pointer;transition:all .18s;}
+.abtn.edit{background:var(--sand);color:var(--text-mid);}.abtn.edit:hover{background:var(--caramel);color:white;}
+.abtn.del{background:#fee;color:#c55;}.abtn.del:hover{background:#c55;color:white;}
+.abtn.vis-on{background:#e8f5e4;color:var(--sage);}.abtn.vis-on:hover{background:var(--sage);color:white;}
+.abtn.vis-off{background:#fff3e0;color:#e0903a;}.abtn.vis-off:hover{background:#e0903a;color:white;}
+.cat-count{font-size:10px;color:var(--text-light);text-align:right;}
+.admin-event-list{display:flex;flex-direction:column;gap:9px;max-height:300px;overflow-y:auto;margin-bottom:14px;}
+.admin-event-item{display:flex;align-items:center;gap:10px;padding:9px 11px;background:var(--cream);border-radius:10px;border:1.5px solid transparent;transition:border-color .2s;}
+.admin-event-item:hover{border-color:var(--caramel);}
+.admin-event-date-block{background:var(--brown);color:white;border-radius:8px;padding:6px 10px;text-align:center;min-width:52px;flex-shrink:0;}
+.admin-event-date-block .m{font-size:9px;color:rgba(255,255,255,.55);}
+.admin-event-date-block .d{font-family:'Shippori Mincho',serif;font-size:20px;line-height:1;}
+.admin-event-info{flex:1;min-width:0;}
+.admin-event-title{font-size:13px;font-weight:500;color:var(--brown);}
+.admin-event-meta{font-size:10px;color:var(--text-light);}
+.admin-event-actions{display:flex;gap:4px;flex-shrink:0;}
+
+/* FORM */
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:11px;}
+.form-group{display:flex;flex-direction:column;gap:4px;}
+.form-group.full{grid-column:1/-1;}
+.form-group label{font-size:11px;color:var(--text-mid);letter-spacing:0.07em;}
+.form-group input,.form-group select,.form-group textarea{padding:8px 10px;border:1.5px solid var(--sand);border-radius:8px;font-family:'Zen Maru Gothic',sans-serif;font-size:12px;color:var(--text-dark);background:var(--cream);outline:none;transition:border-color .2s;}
+.form-group input:focus,.form-group select:focus,.form-group textarea:focus{border-color:var(--caramel);}
+.form-group textarea{resize:vertical;min-height:70px;}
+.checkbox-row{display:flex;flex-wrap:wrap;gap:9px;align-items:center;}
+.checkbox-label{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-mid);cursor:pointer;}
+.checkbox-label input[type=checkbox]{width:14px;height:14px;accent-color:var(--caramel);}
+.form-actions{display:flex;gap:7px;justify-content:flex-end;margin-top:16px;}
+.form-btn{padding:9px 20px;border-radius:8px;border:none;font-family:'Zen Maru Gothic',sans-serif;font-size:12px;cursor:pointer;transition:all .2s;letter-spacing:0.07em;}
+.form-btn.primary{background:var(--caramel);color:white;}.form-btn.primary:hover{background:var(--terracotta);}
+.form-btn.secondary{background:var(--sand);color:var(--text-mid);}.form-btn.secondary:hover{background:var(--caramel);color:white;}
+.cat-selector{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:7px;max-height:200px;overflow-y:auto;padding:2px;}
+.cat-select-item{display:flex;align-items:center;gap:7px;padding:7px 9px;background:var(--cream);border-radius:8px;border:1.5px solid transparent;cursor:pointer;transition:all .18s;}
+.cat-select-item:hover{border-color:var(--caramel);}
+.cat-select-item.selected{border-color:var(--caramel);background:#fff4ec;}
+.cat-select-item input[type=checkbox]{width:13px;height:13px;accent-color:var(--caramel);}
+.cat-select-thumb{width:32px;height:32px;border-radius:5px;object-fit:cover;flex-shrink:0;background:var(--sand);display:flex;align-items:center;justify-content:center;font-size:14px;}
+.cat-select-name{font-size:11px;color:var(--brown);font-weight:500;}
+
+/* TOAST */
+.toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--brown);color:white;padding:11px 22px;border-radius:100px;font-size:13px;opacity:0;transition:all .3s;z-index:999;pointer-events:none;white-space:nowrap;}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+.toast.toast-error{background:#c55;}
+.toast.toast-info{background:var(--caramel);}
+
+/* LOADING */
+#loadingOverlay{display:none;position:fixed;inset:0;background:rgba(255,255,255,.7);z-index:9999;align-items:center;justify-content:center;flex-direction:column;gap:14px;}
+.spinner{width:40px;height:40px;border:3px solid var(--sand);border-top-color:var(--caramel);border-radius:50%;animation:spin .8s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+@keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+@keyframes modalIn{from{opacity:0;transform:scale(.91) translateY(14px)}to{opacity:1;transform:scale(1) translateY(0)}}
+
+@media(max-width:768px){
+  header{padding:0 14px;}
+  .hero{padding:48px 18px 64px;}
+  .section,.schedule-section,.about-section{padding:50px 18px;}
+  .event-card-inner{grid-template-columns:90px 1fr;grid-template-rows:auto auto;}
+  .event-action{grid-column:1/-1;padding:0 14px 14px;}
+  .about-inner{grid-template-columns:1fr;}
+  .paw-circle{display:none;}
+  footer{padding:32px 18px;}
+  .form-grid{grid-template-columns:1fr;}
+  .admin-body{padding:14px 16px;}
+}
+</style>
+</head>
+<body>
+
+<!-- LOADING -->
+<div id="loadingOverlay"><div class="spinner"></div><div style="font-size:13px;color:var(--text-mid);">読み込み中...</div></div>
+
+<!-- HEADER -->
+<header>
+  <a href="#" class="logo">
+    <div class="logo-icon">🐾</div>
+    <div class="logo-text">
+      <div class="main">愛すべき野良猫の会</div>
+      <div class="sub">仙台市を中心に活動 | 代表：ゴンママ</div>
+    </div>
+  </a>
+  <div class="header-right">
+    <nav>
+      <a href="#cats">猫を探す</a>
+      <a href="#schedule">譲渡会</a>
+      <a href="#about">活動について</a>
+      <a href="#contact">お問い合わせ</a>
+    </nav>
+    <div id="loginArea"></div>
+    <button class="btn-admin" id="btnAdmin" onclick="openAdmin()">⚙ 管理</button>
+  </div>
+</header>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-badge">🌿 仙台市を中心に活動中</div>
+  <h1>愛すべき命に、<span>あたたかい家族</span>を。</h1>
+  <p>お外で生まれた不幸な猫が増えないよう、TNR・地域猫の認知・保護猫の里親募集活動を行っています。</p>
+  <span class="org-link">代表：ゴンママ（佐藤美紀）｜<a href="https://aisubekinoranekonokai-gonmama.jimdosite.com/" target="_blank">公式サイトはこちら →</a></span>
+  <div class="hero-actions">
+    <a href="#cats" class="btn-primary">🐱 猫を探してみる</a>
+    <a href="#schedule" class="btn-outline">📅 譲渡会の予定を見る</a>
+  </div>
+</section>
+
+<!-- CATS -->
+<section class="section" id="cats">
+  <div class="section-header">
+    <div class="section-tag">Meet Our Cats</div>
+    <h2 class="section-title">ご縁を待っている子たち<span>すべての子に、あたたかいお家を</span></h2>
+  </div>
+  <div class="filter-bar">
+    <button class="filter-btn active" onclick="filterCats('all',this)">すべて</button>
+    <button class="filter-btn" onclick="filterCats('female',this)">♀ 女の子</button>
+    <button class="filter-btn" onclick="filterCats('male',this)">♂ 男の子</button>
+    <button class="filter-btn" onclick="filterCats('kitten',this)">仔猫</button>
+    <button class="filter-btn" onclick="filterCats('adult',this)">成猫</button>
+    <button class="filter-btn" onclick="filterCats('available',this)">募集中のみ</button>
+  </div>
+  <div class="cat-grid" id="catGrid"></div>
+</section>
+
+<!-- SCHEDULE -->
+<div class="schedule-section" id="schedule">
+  <div class="schedule-inner">
+    <div class="section-header">
+      <div class="section-tag">Event Schedule</div>
+      <h2 class="section-title">譲渡会のスケジュール<span>直接会いに来てください。きっとご縁がつながります</span></h2>
+    </div>
+    <div class="schedule-list" id="scheduleList"></div>
+  </div>
+</div>
+
+<!-- ABOUT -->
+<div class="about-section" id="about">
+  <div class="about-inner">
+    <div class="paw-circle">🐈</div>
+    <div class="about-content">
+      <h2>愛すべき命のために、<br>大切にしていること</h2>
+      <p>「愛すべき野良猫の会」は、仙台市を中心にTNR・地域猫活動・保護猫の里親募集を行っている任意団体です。2011年の東日本大震災をきっかけに、不幸な命を減らしたいという強い想いで発足しました。</p>
+      <p>これまでTNRを行った数は約3,200頭、保護した猫は約640頭、譲渡した猫は約960頭にのぼります。引き取り依頼はお受けしておりませんが、不妊手術のお手伝い・保護へのサポートは行っています。</p>
+      <a href="https://aisubekinoranekonokai-gonmama.jimdosite.com/" target="_blank" class="about-link">公式サイトで詳しく見る →</a>
+      <div class="about-steps">
+        <div class="step"><div class="step-num">1</div><div class="step-text"><strong>サイトで猫を探す</strong><br>プロフィールをよく読んで、気になる子を見つけてください。</div></div>
+        <div class="step"><div class="step-num">2</div><div class="step-text"><strong>お問い合わせ・事前応募</strong><br>フォームからご連絡ください。折り返しご連絡いたします。</div></div>
+        <div class="step"><div class="step-num">3</div><div class="step-text"><strong>譲渡会でお会いする</strong><br>直接触れ合って、相性を確かめてください。</div></div>
+        <div class="step"><div class="step-num">4</div><div class="step-text"><strong>トライアル（1〜2週間）</strong><br>正式なご縁の前に、お試し期間を設けています。</div></div>
+        <div class="step"><div class="step-num">5</div><div class="step-text"><strong>正式譲渡</strong><br>譲渡契約書を交わして、新しい家族のはじまりです。</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- FOOTER -->
+<footer id="contact">
+  <div class="footer-logo">🐾 愛すべき野良猫の会</div>
+  <div class="footer-sub">AISUBEKINORANEKONOKAI | 仙台市を中心に活動</div>
+  <div class="footer-links">
+    <a href="https://aisubekinoranekonokai-gonmama.jimdosite.com/" target="_blank">公式サイト</a>
+    <a href="https://aisubekigonmama.amebaownd.com" target="_blank">ブログ</a>
+    <a href="#">お問い合わせ</a>
+  </div>
+  <p>© 愛すべき野良猫の会 | All Rights Reserved</p>
+</footer>
+
+<!-- CAT DETAIL MODAL -->
+<div class="overlay" id="detailOverlay" onclick="closeDetailBg(event)">
+  <div class="detail-modal">
+    <div id="detailPhotoWrap"></div>
+    <div class="modal-body">
+      <div class="modal-header">
+        <div>
+          <div id="detailName" style="font-family:'Shippori Mincho',serif;font-size:20px;color:var(--brown);"></div>
+          <div id="detailRuby" style="font-size:11px;color:var(--text-light);letter-spacing:.13em;"></div>
+        </div>
+        <button class="modal-close" onclick="closeDetail()">✕</button>
+      </div>
+      <div id="detailContent"></div>
+      <button class="modal-apply-btn" id="detailApplyBtn">🐾 この子に応募する</button>
+    </div>
+  </div>
+</div>
+
+<!-- EVENT DETAIL MODAL -->
+<div class="overlay" id="eventOverlay" onclick="closeEventModalBg(event)">
+  <div class="event-modal">
+    <div class="event-modal-header">
+      <div>
+        <div style="font-size:10px;letter-spacing:.2em;color:rgba(255,255,255,.5);margin-bottom:5px;">EVENT DETAIL</div>
+        <h2 id="evModalTitle"></h2>
+      </div>
+      <button class="modal-close" onclick="closeEventModal()">✕</button>
+    </div>
+    <div class="event-modal-body">
+      <div class="event-modal-meta" id="evModalMeta"></div>
+      <div class="event-modal-section-title">📋 参加予定の猫</div>
+      <div class="event-cats-grid" id="evModalCats"></div>
+      <div id="evModalNote"></div>
+    </div>
+  </div>
+</div>
+
+<!-- LOGIN MODAL -->
+<div class="overlay" id="loginOverlay" onclick="closeLoginOverlayBg(event)">
+  <div class="login-modal">
+    <h2>🔐 管理者ログイン</h2>
+    <p>ゴンママ専用の管理画面です</p>
+    <div class="login-field">
+      <label>メールアドレス</label>
+      <input type="email" id="loginEmail" placeholder="example@gmail.com">
+    </div>
+    <div class="login-field">
+      <label>パスワード</label>
+      <input type="password" id="loginPass" placeholder="パスワード" onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <button class="login-btn" onclick="doLogin()">ログイン</button>
+    <button class="login-cancel" onclick="closeLoginOverlay()">キャンセル</button>
+  </div>
+</div>
+
+<!-- ADMIN PANEL -->
+<div class="admin-overlay" id="adminOverlay" onclick="closeAdminBg(event)">
+  <div class="admin-panel">
+    <div class="admin-header">
+      <h2>⚙ 管理パネル — 愛すべき野良猫の会</h2>
+      <button class="admin-close-btn" onclick="closeAdmin()">✕</button>
+    </div>
+    <div class="admin-body">
+      <div class="admin-tabs">
+        <button class="admin-tab active" onclick="switchTab('cats',this)">🐱 猫の管理</button>
+        <button class="admin-tab" onclick="switchTab('catform',this)">➕ 猫を登録・編集</button>
+        <button class="admin-tab" onclick="switchTab('events',this)">📅 譲渡会の管理</button>
+        <button class="admin-tab" onclick="switchTab('eventform',this)">➕ 譲渡会を登録・編集</button>
+      </div>
+
+      <!-- 猫リスト -->
+      <div class="tab-content active" id="tab-cats">
+        <div class="notice">「表示中」の子だけが一般ページに公開されます。データはFirebaseに保存され、どの端末からでも確認できます。</div>
+        <div class="admin-cat-list" id="adminCatList"></div>
+        <div class="cat-count" id="catCount"></div>
+      </div>
+
+      <!-- 猫フォーム -->
+      <div class="tab-content" id="tab-catform">
+        <div id="catFormTitle" style="font-size:14px;font-weight:500;color:var(--brown);margin-bottom:12px;">新しい子を登録</div>
+        <div class="form-grid">
+          <div class="form-group"><label>名前</label><input type="text" id="f_name" placeholder="例：こむぎ"></div>
+          <div class="form-group"><label>よみがな / ローマ字</label><input type="text" id="f_ruby" placeholder="例：Komugi"></div>
+          <div class="form-group"><label>品種</label><input type="text" id="f_breed" placeholder="例：キジ白"></div>
+          <div class="form-group"><label>毛色</label><input type="text" id="f_color" placeholder="例：キジ白"></div>
+          <div class="form-group"><label>性別</label><select id="f_gender"><option value="female">♀ 女の子</option><option value="male">♂ 男の子</option></select></div>
+          <div class="form-group"><label>推定年齢</label><input type="text" id="f_age" placeholder="例：推定 2歳"></div>
+          <div class="form-group"><label>年齢区分</label><select id="f_ageGroup"><option value="kitten">仔猫（〜1歳未満）</option><option value="adult">成猫（1歳以上）</option></select></div>
+          <div class="form-group"><label>体重</label><input type="text" id="f_weight" placeholder="例：3.2kg"></div>
+          <div class="form-group"><label>募集ステータス</label><select id="f_status"><option value="available">募集中</option><option value="pending">応募検討中</option><option value="adopted">譲渡済み</option></select></div>
+          <div class="form-group"><label>保護エリア</label><input type="text" id="f_area" placeholder="例：仙台市保護"></div>
+          <!-- 写真 -->
+          <div class="form-group full">
+            <label>写真（ローカルファイル または URL）</label>
+            <div style="display:flex;flex-direction:column;gap:8px;margin-top:2px;">
+              <div id="imgPreviewWrap" style="display:none;position:relative;width:100%;height:150px;border-radius:10px;overflow:hidden;background:var(--sand);">
+                <img id="imgPreview" style="width:100%;height:150px;object-fit:cover;display:block;">
+                <button type="button" onclick="clearImg()" style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,.48);color:white;border:none;border-radius:50%;width:26px;height:26px;font-size:13px;cursor:pointer;line-height:26px;text-align:center;">✕</button>
+              </div>
+              <label style="display:flex;align-items:center;gap:8px;padding:9px 13px;border:1.5px dashed var(--caramel);border-radius:9px;cursor:pointer;background:#fff9f4;">
+                <span style="font-size:16px;">📁</span>
+                <span style="font-size:12px;color:var(--text-mid);">PCから写真を選ぶ（JPG・PNG・WEBP）→ Cloudinaryに自動保存</span>
+                <input type="file" id="f_imgFile" accept="image/*" style="display:none;" onchange="handleImgFile(this)">
+              </label>
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="font-size:11px;color:var(--text-light);white-space:nowrap;flex-shrink:0;">または URL：</span>
+                <input type="text" id="f_imgUrl" placeholder="https://... 画像URLを直接入力" oninput="handleImgUrl(this.value)">
+              </div>
+            </div>
+          </div>
+          <div class="form-group full"><label>性格タグ（カンマ区切り）</label><input type="text" id="f_personality" placeholder="例：人懐っこい,甘えん坊,ゴロゴロ多め"></div>
+          <div class="form-group full"><label>その他タグ（カンマ区切り）</label><input type="text" id="f_tags" placeholder="例：室内向き,多頭NG,子どもOK"></div>
+          <div class="form-group full"><label>プロフィール・コメント</label><textarea id="f_comment" placeholder="この子の魅力や特徴を書いてください…"></textarea></div>
+          <div class="form-group full"><label>健康状態・備考</label><input type="text" id="f_health" placeholder="例：良好。定期的なブラッシング必要"></div>
+          <div class="form-group full">
+            <label>医療・処置状況</label>
+            <div class="checkbox-row" style="margin-top:5px;">
+              <label class="checkbox-label"><input type="checkbox" id="f_v_triple">三種混合済</label>
+              <label class="checkbox-label"><input type="checkbox" id="f_v_rabies">狂犬病済</label>
+              <label class="checkbox-label"><input type="checkbox" id="f_v_leukemia">白血病済</label>
+              <label class="checkbox-label"><input type="checkbox" id="f_neutered">不妊手術済</label>
+              <label class="checkbox-label"><input type="checkbox" id="f_microchip">MC登録済</label>
+            </div>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="form-btn secondary" onclick="cancelCatEdit()">キャンセル</button>
+          <button class="form-btn primary" onclick="saveCat()">💾 保存する</button>
+        </div>
+      </div>
+
+      <!-- イベントリスト -->
+      <div class="tab-content" id="tab-events">
+        <div class="notice">登録した譲渡会はスケジュールページに表示されます。参加する猫を各イベントに紐付けできます。</div>
+        <div class="admin-event-list" id="adminEventList"></div>
+        <div class="cat-count" id="eventCount"></div>
+      </div>
+
+      <!-- イベントフォーム -->
+      <div class="tab-content" id="tab-eventform">
+        <div id="eventFormTitle" style="font-size:14px;font-weight:500;color:var(--brown);margin-bottom:12px;">新しい譲渡会を登録</div>
+        <div class="form-grid">
+          <div class="form-group full"><label>タイトル</label><input type="text" id="ev_title" placeholder="例：7月度 ほごねこ譲渡会"></div>
+          <div class="form-group"><label>開催日</label><input type="date" id="ev_date"></div>
+          <div class="form-group"><label>開始時間</label><input type="time" id="ev_start" value="12:00"></div>
+          <div class="form-group"><label>終了時間</label><input type="time" id="ev_end" value="15:00"></div>
+          <div class="form-group"><label>会場名</label><input type="text" id="ev_place" placeholder="例：ダイシン柳生店"></div>
+          <div class="form-group full"><label>会場住所・アクセス</label><input type="text" id="ev_address" placeholder="例：仙台市若林区○○ / 雨天決行・店内開催"></div>
+          <div class="form-group full"><label>備考・注意事項</label><textarea id="ev_note" placeholder="例：事前予約優先・当日受付あり"></textarea></div>
+          <div class="form-group full">
+            <label>参加する猫を選ぶ（複数選択可）</label>
+            <div class="cat-selector" id="catSelector" style="margin-top:6px;"></div>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="form-btn secondary" onclick="cancelEventEdit()">キャンセル</button>
+          <button class="form-btn primary" onclick="saveEvent()">💾 保存する</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
