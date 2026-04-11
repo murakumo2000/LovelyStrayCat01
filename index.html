@@ -1038,6 +1038,9 @@ async function _renderFormalWord(id, orgMember) {
   showLoading(false);
   showToast("📝 Wordファイルをダウンロードしました");
 }
+
+// ── 団体側メンバーをセレクトで選択（住所・電話のみ使用） ──
+function selectOrgMember() {
   if (!members.length) {
     alert("メンバーが登録されていません。\n先にメンバー管理タブからメンバーを登録してください。");
     return null;
