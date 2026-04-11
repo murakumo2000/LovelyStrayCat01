@@ -550,7 +550,7 @@ window.closeOutputFormatDirect = () => {
   _outputCallback = null;
 };
 window.doOutput = fmt => {
-  document.getElementById("outputFormatOverlay").classList.remove("open");
+  document.getElementById("outputFormatOverlay").style.display = "none";
   if (!_outputCallback) return;
   const { type, catId, orgMember } = _outputCallback;
   _outputCallback = null;
@@ -584,8 +584,197 @@ window.printFormalContract = id => {
   openOutputFormatDialog("formal", id, orgMember);
 };
 
-// ── Word生成用: docxをESモジュールとして動的インポート ────
-// ── Word生成: JSZip + XML直接生成方式（CDN依存なし） ────────
+// ── トライアル契約書 PDF ──────────────────────────────────
+function _renderTrialPDF(id, orgMember) {
+  const cat = cats.find(c => c.id === id);
+  if (!cat) return;
+  const tr    = cat.trial||{};
+  const today = formatDateJP(new Date().toISOString().slice(0,10));
+  const medInfo = [
+    `エイズ・白血病：陰性`,
+    `３種混合ワクチン接種：${cat.vaccine?.triple?"済":"未"}${cat.vaccine?.tripleDate?" (最終日"+formatDateJP(cat.vaccine.tripleDate)+")":""}`,
+    `ノミ・ダニ駆除・駆虫：${cat.flea?"済":"未"}`,
+    `不妊手術：${cat.neutered?"済":"未"}`
+  ].join("\n");
+  const trialStart = formatDateJP(tr.startDate);
+  const trialEnd   = tr.endDate ? formatDateJP(tr.endDate) : "　　　　年　　月　　日";
+  const orgTel = orgMember.tel||"";
+  const html = `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>トライアル契約書</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:210mm;height:297mm;background:white;}
+  body{font-family:'MS Mincho','游明朝',serif;font-size:9.5pt;line-height:1.55;}
+  .page{width:210mm;height:297mm;padding:14mm 18mm 8mm;overflow:hidden;}
+  h1{text-align:center;font-size:14pt;margin-bottom:10pt;letter-spacing:.2em;}
+  .date{text-align:right;margin-bottom:8pt;font-size:9pt;}
+  .sec-lbl{font-weight:bold;margin-bottom:3pt;font-size:9pt;}
+  table.info{width:100%;border-collapse:collapse;margin-bottom:8pt;font-size:9pt;}
+  table.info td{padding:1pt 4pt;vertical-align:top;}
+  table.info .lbl{width:4.5em;white-space:nowrap;font-weight:bold;}
+  .period{margin:7pt 0;font-size:9pt;}
+  .sec-title{text-align:center;font-size:9pt;margin:6pt 0 4pt;font-weight:bold;}
+  ol{margin:0;padding-left:1.7em;}
+  ol li{margin-bottom:2pt;font-size:8.8pt;line-height:1.5;}
+  .closing{text-align:center;margin:7pt 0 3pt;font-size:8.5pt;line-height:1.7;}
+  .note{color:red;font-size:8pt;text-align:center;margin:2pt 0;}
+  .cage-note{text-align:center;font-size:8pt;margin:2pt 0;}
+  .sign-block{margin-top:8pt;}
+  .sign-row{display:flex;gap:8pt;margin-bottom:4pt;align-items:flex-end;}
+  .sign-lbl{width:2.5em;font-size:9pt;flex-shrink:0;font-weight:bold;}
+  .sign-line{flex:1;border-bottom:1px solid #000;min-height:16pt;font-size:9pt;padding-bottom:1pt;}
+  .stamp{display:inline-flex;align-items:center;justify-content:center;width:18pt;height:18pt;border:1px solid #000;border-radius:50%;margin-left:4pt;flex-shrink:0;font-size:7.5pt;}
+  .sign-divider{margin:5pt 0 4pt;border-top:1px dashed #bbb;}
+  .fee-block{text-align:center;margin-top:7pt;font-size:8.5pt;line-height:1.7;border-top:1px solid #ccc;padding-top:5pt;}
+  .red{color:red;}
+  @media print{html,body{margin:0;padding:0;}.page{padding:14mm 18mm 8mm;}@page{size:A4 portrait;margin:0;}}
+</style></head><body><div class="page">
+  <h1>トライアル契約書</h1>
+  <div class="date">${today}</div>
+  <div class="sec-lbl">【譲渡予定動物】</div>
+  <table class="info">
+    <tr><td class="lbl">種別</td><td>猫</td><td class="lbl">仮名</td><td>${cat.name}</td></tr>
+    <tr><td class="lbl">月齢</td><td>${cat.age}</td><td class="lbl">性別</td><td>${cat.gender==="male"?"♂":"♀"}</td></tr>
+    <tr><td class="lbl">医療</td><td colspan="3" style="white-space:pre-line;font-size:8.5pt;">${medInfo}</td></tr>
+  </table>
+  <div class="period">トライアル期間　${trialStart}　〜　${trialEnd}</div>
+  <div class="sec-title">トライアル期間中の約束事項</div>
+  <ol>
+    <li>トライアルは、譲渡予定動物にとって飼育環境が適正であるかを、保護主が確認する為に行うものである。</li>
+    <li>保護主から里親予定者に対し飼育状況の改善要求がなされた場合には、譲渡予定動物の飼育にふさわしい環境を整える。</li>
+    <li>里親予定者は保護主からの譲渡予定動物の<span class="red">写真・動画</span>、面会請求に応じなければならない。</li>
+    <li>里親予定者は、いかなる理由においても保護主の譲渡予定動物の<span class="red">返還要求</span>に応じなければならない。</li>
+    <li>里親予定者は、譲渡予定動物を放し飼いにする事なく<span class="red">完全室内飼い</span>で管理する。</li>
+    <li>万が一、譲渡予定動物を脱走させてしまった場合、里親予定者は速やかに保護主に連絡し、責任を持って探し出さなければならない。捜索に係る費用は里親予定者の負担とする。</li>
+    <li>里親予定者は、譲渡予定動物を飼育できない状況になった場合、速やかに保護主に報告し譲渡予定動物を返還する。</li>
+    <li>譲渡予定動物の給餌、給水および衛生管理に係る費用は、里親予定者の費用とする。</li>
+    <li>譲渡予定動物に医療行為を受けさせる場合、里親予定者は速やかに保護主に相談する。譲渡予定動物の<span class="red">病気</span>にかかる診断、治療に係る費用については<span class="red">保護主の負担</span>とする。ただし、里親予定者の過失による怪我や事故に関しては里親予定者の負担とする。</li>
+  </ol>
+  <div class="closing">上記の内容を理解、納得し、トライアルを開始致します。<br>本契約書は、仮契約となる為、トライアル期間のみ有効とさせて頂きます。</div>
+  <div class="note">※貸し出しケージ・トイレはトライアル終了時に返却となります。</div>
+  <div class="cage-note">尚、解体される際は上段・下段のみの解体でお願い致します。前後左右の連結は外さないようご注意下さい。</div>
+  <div class="sign-block">
+    <div class="sign-row"><div class="sign-lbl">住所</div><div class="sign-line">${tr.zip||""} ${tr.address||""}</div></div>
+    <div class="sign-row"><div class="sign-lbl">氏名</div><div class="sign-line"></div><span class="stamp">印</span></div>
+    <div class="sign-row"><div class="sign-lbl">電話</div><div class="sign-line">${tr.tel||""}</div></div>
+    <div class="sign-divider"></div>
+    <div class="sign-row"><div class="sign-lbl">氏名</div><div class="sign-line">愛すべき野良猫の会　代表</div><span class="stamp">印</span></div>
+    <div class="sign-row"><div class="sign-lbl">電話</div><div class="sign-line">${orgTel}</div></div>
+  </div>
+  <div class="fee-block">
+    保護猫たちには必要な医療を施した上で譲渡しております。<br>
+    正式譲渡の際には医療費の一部負担として<br>
+    去勢済20,000円・避妊済25,000円・未不妊18,000円の<br>
+    医療費協力金のご協力をお願いしております。
+  </div>
+</div></body></html>`;
+  const w = window.open("","_blank");
+  w.document.write(html); w.document.close();
+  setTimeout(()=>w.print(), 600);
+}
+
+// ── 正式譲渡契約書 PDF ────────────────────────────────────
+function _renderFormalPDF(id, orgMember) {
+  const cat = cats.find(c => c.id === id);
+  if (!cat) return;
+  const tr    = cat.trial||{};
+  const today = formatDateJP(new Date().toISOString().slice(0,10));
+  const fee   = calcMedicalFee(cat).toLocaleString();
+  const medInfo = [
+    `エイズ・白血病：陰性${cat.vaccine?.leukemiaDate?" (最終日"+formatDateJP(cat.vaccine.leukemiaDate)+")":""}`,
+    `３種混合ワクチン接種：${cat.vaccine?.triple?"１回":"未"}${cat.vaccine?.tripleDate?" (最終日"+formatDateJP(cat.vaccine.tripleDate)+")":""}`,
+    `ノミ・ダニ駆除・駆虫${cat.flea?"済":"未"}`,
+    `${cat.neutered?(cat.gender==="male"?"去勢済":"避妊済"):"未不妊"}`
+  ].join("\n");
+  const photoTag = cat.img
+    ? `<img src="${cat.img}" style="width:68pt;height:68pt;object-fit:cover;border:1px solid #ccc;flex-shrink:0;">`
+    : `<div style="width:68pt;height:68pt;border:1px solid #ccc;display:flex;align-items:center;justify-content:center;font-size:8pt;flex-shrink:0;color:#999;">写真</div>`;
+  const orgZipAddr = `${orgMember.zip||""} ${orgMember.address||""}`.trim();
+  const orgTel = orgMember.tel||"";
+  const html = `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>正式譲渡契約書</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:210mm;height:297mm;background:white;}
+  body{font-family:'MS Mincho','游明朝',serif;font-size:9.5pt;line-height:1.5;}
+  .page{width:210mm;height:297mm;padding:14mm 18mm 8mm;overflow:hidden;}
+  h1{text-align:center;font-size:14pt;margin-bottom:6pt;letter-spacing:.2em;}
+  .date{text-align:right;margin-bottom:6pt;font-size:9pt;}
+  .sec-lbl{font-weight:bold;margin-bottom:3pt;font-size:9pt;}
+  .header-block{display:flex;justify-content:space-between;align-items:flex-start;gap:6pt;margin-bottom:6pt;}
+  table.info{border-collapse:collapse;font-size:9pt;flex:1;}
+  table.info td{padding:1pt 3pt;vertical-align:top;}
+  table.info .lbl{width:3.8em;white-space:nowrap;font-weight:bold;}
+  .pledge{margin:5pt 0 4pt;font-size:9pt;}
+  ol{margin:0;padding-left:1.7em;}
+  ol li{margin-bottom:1.5pt;font-size:8.5pt;line-height:1.45;}
+  .closing{margin:6pt 0 4pt;font-size:8.5pt;line-height:1.6;}
+  .sign-section{margin-top:6pt;}
+  .sign-blocks{display:flex;gap:8pt;}
+  .sign-block{flex:1;padding:5pt 6pt;border:1px solid #888;}
+  .sign-block-title{font-weight:bold;margin-bottom:3pt;font-size:8.5pt;}
+  .sign-row{display:flex;gap:4pt;margin-bottom:2.5pt;align-items:flex-end;}
+  .sign-lbl{width:3em;font-size:8.5pt;flex-shrink:0;font-weight:bold;}
+  .sign-val{flex:1;border-bottom:1px solid #000;min-height:14pt;font-size:8.5pt;padding-bottom:1pt;}
+  .stamp{display:inline-flex;align-items:center;justify-content:center;width:20pt;height:20pt;border:1px solid #000;border-radius:50%;margin-left:4pt;flex-shrink:0;font-size:8pt;}
+  @media print{html,body{margin:0;padding:0;}.page{padding:14mm 18mm 8mm;}@page{size:A4 portrait;margin:0;}}
+</style></head><body><div class="page">
+  <h1>正式譲渡契約書</h1>
+  <div class="date">${today}</div>
+  <div class="sec-lbl">【譲渡動物】</div>
+  <div class="header-block">
+    <table class="info">
+      <tr><td class="lbl">種別</td><td>猫　１頭</td></tr>
+      <tr><td class="lbl">月齢</td><td>${cat.age}</td></tr>
+      <tr><td class="lbl">体重</td><td>${cat.weight||""}</td></tr>
+      <tr><td class="lbl">誕生日</td><td>${cat.birthday?formatDateJP(cat.birthday):""}</td></tr>
+      <tr><td class="lbl">毛色</td><td>${cat.color||""}</td></tr>
+      <tr><td class="lbl">性別</td><td>${cat.gender==="male"?"♂":"♀"}</td></tr>
+      <tr><td class="lbl">仮名</td><td>${cat.name}　[正式名]　${cat.formalName||"　　　　　"}</td></tr>
+      <tr><td class="lbl">医療</td><td style="white-space:pre-line;font-size:8.5pt;">${medInfo}</td></tr>
+    </table>
+    ${photoTag}
+  </div>
+  <div class="pledge">私は上記の猫を譲り受けるにあたり、下記事項を誓約致します。</div>
+  <ol>
+    <li>譲渡された猫を共に生きる伴侶・家族として、最後まで責任を持って愛育します。</li>
+    <li>事故・感染症・迷子・虐待等を防ぐため、完全室内飼いをします。</li>
+    <li>脱走防止に留意し、防止対策を施したうえで、必要に応じてケージ等を利用します。</li>
+    <li>脱走した場合は、下記明記人に一報の上、早急な保護に努めます。</li>
+    <li>適切な給餌管理・健康管理を行い、事故や病気の場合は速やかに適切な医療を受けさせます。</li>
+    <li>譲渡猫に抜爪手術はしません。また虐待や殺傷等本猫を傷つける行為も絶対に行いません。</li>
+    <li>感染症予防のために動物病院と相談の上、１年に一度のワクチン接種を受けます。</li>
+    <li>本猫の様子を適宜、画像付きでお知らせします。</li>
+    <li>本猫を譲渡者の承諾なしに第三者に譲ったり、誓約書表記の住所以外での飼育はしません。</li>
+    <li>引越しなどで住所や電話番号が変更する場合、速やかに譲渡人にお知らせします。</li>
+    <li>本猫を第三者に譲渡する必要が出てきた場合、速やかに譲渡人に相談の上必ず新しい飼い主の氏名・住所・連絡先を開示します。</li>
+    <li>譲渡後に発見された病気等があっても、自己が責任を持って飼育します。</li>
+    <li>万が一、本猫について、譲渡人だけでは判断できない状況、状態が生じた場合、必ず譲渡人に連絡・相談します。</li>
+  </ol>
+  <div class="closing">
+    トライアル期間を無事終了し、双方問題がないと判断し正式譲渡と致します。また、正式譲渡の後でも、飼育不適切と判断された場合、または譲渡人との信頼関係が継続困難と判断した場合は、譲渡人が引き取る権利を有します。<br>
+    本誓約書は２通作成し、譲渡人・譲受人双方がそれぞれ１通ずつ本猫が死亡するまで保管します。<br>
+    本誓約書を以って、医療費一部ご協力金　金<strong>${fee}円</strong>　の領収書に代えさせて頂きます。
+  </div>
+  <div class="sign-section">
+    <div class="sign-blocks">
+      <div class="sign-block">
+        <div class="sign-block-title">【譲受人】</div>
+        <div class="sign-row"><div class="sign-lbl">住所</div><div class="sign-val">${tr.zip||""} ${tr.address||""}</div></div>
+        <div class="sign-row"><div class="sign-lbl">氏名</div><div class="sign-val"></div><span class="stamp">印</span></div>
+        <div class="sign-row"><div class="sign-lbl">電話</div><div class="sign-val">${tr.tel||""}</div></div>
+      </div>
+      <div class="sign-block">
+        <div class="sign-block-title">【譲渡人】</div>
+        <div class="sign-row"><div class="sign-lbl">住所</div><div class="sign-val">${orgZipAddr}</div></div>
+        <div class="sign-row"><div class="sign-lbl">氏名</div><div class="sign-val">愛すべき野良猫の会　代表</div><span class="stamp">印</span></div>
+        <div class="sign-row"><div class="sign-lbl">電話</div><div class="sign-val">${orgTel}</div></div>
+      </div>
+    </div>
+  </div>
+</div></body></html>`;
+  const w = window.open("","_blank");
+  w.document.write(html); w.document.close();
+  setTimeout(()=>w.print(), 600);
+}
 let _jszip = null;
 async function getJSZip() {
   if (_jszip) return _jszip;
@@ -657,7 +846,7 @@ ${xmlBody}
 function wxPara(text, opts={}) {
   const sz = opts.sz || 20;
   const bold = opts.bold ? '<w:b/>' : '';
-  const jc   = opts.center ? '<w:jc w:val="center"/>' : '';
+  const jc   = opts.center ? '<w:jc w:val="center"/>' : opts.right ? '<w:jc w:val="right"/>' : '';
   const spBefore = opts.before || 0;
   const spAfter  = opts.after  || 60;
   const color = opts.red ? '<w:color w:val="FF0000"/>' : '';
@@ -720,7 +909,7 @@ async function _renderTrialWord(id, orgMember) {
 
     const xml = [
       wxPara('トライアル契約書', {center:true, sz:28, bold:true, after:100}),
-      wxPara(today, {center:false, sz:18, after:60}),
+      wxPara(today, {right:true, sz:18, after:80}),
       wxPara('【譲渡予定動物】', {bold:true, sz:18, after:40}),
       wxPara(`種別：猫　　仮名：${cat.name}`, {sz:18, after:30}),
       wxPara(`月齢：${cat.age}　　性別：${cat.gender==='male'?'♂':'♀'}`, {sz:18, after:30}),
@@ -791,7 +980,7 @@ async function _renderFormalWord(id, orgMember) {
 
     const xml = [
       wxPara('正式譲渡契約書', {center:true, sz:28, bold:true, after:100}),
-      wxPara(today, {sz:18, after:60}),
+      wxPara(today, {right:true, sz:18, after:80}),
       wxPara('【譲渡動物】', {bold:true, sz:18, after:40}),
       wxPara(`種別：猫　１頭　　月齢：${cat.age}　　体重：${cat.weight||''}`, {sz:18, after:30}),
       wxPara(`誕生日：${cat.birthday?formatDateJP(cat.birthday):''}　　毛色：${cat.color||''}　　性別：${cat.gender==='male'?'♂':'♀'}`, {sz:18, after:30}),
@@ -1745,6 +1934,7 @@ footer p{font-size:10px;color:rgba(255,255,255,.38);}
     <a href="#">お問い合わせ</a>
   </div>
   <p>© 愛すべき野良猫の会 | All Rights Reserved</p>
+  <p id="buildVersion" style="margin-top:6px;font-size:10px;color:rgba(255,255,255,.28);">サイト更新日時：2026年04月11日 13:34</p>
 </footer>
 
 <!-- CAT DETAIL MODAL -->
