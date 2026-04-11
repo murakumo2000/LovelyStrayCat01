@@ -547,7 +547,7 @@ window.closeOutputFormat = e => {
   if (e.target === document.getElementById("outputFormatOverlay")) closeOutputFormatDirect();
 };
 window.closeOutputFormatDirect = () => {
-  document.getElementById("outputFormatOverlay").classList.remove("open");
+  document.getElementById("outputFormatOverlay").style.display = "none";
   _outputCallback = null;
 };
 window.doOutput = fmt => {
@@ -566,7 +566,7 @@ function openOutputFormatDialog(type, catId, orgMember) {
   const titles = { trial:"トライアル契約書", formal:"正式譲渡契約書" };
   document.getElementById("outputFormatTitle").textContent = `${titles[type]} — 出力形式を選択`;
   _outputCallback = { type, catId, orgMember };
-  document.getElementById("outputFormatOverlay").classList.add("open");
+  document.getElementById("outputFormatOverlay").style.display = "flex";
 }
 
 window.printTrialContract = id => {
@@ -585,7 +585,22 @@ window.printFormalContract = id => {
   openOutputFormatDialog("formal", id, orgMember);
 };
 
-// ── トライアル契約書 PDF ──────────────────────────────────
+// ── Word生成用: docx.jsの読み込み完了を待つ ──────────────
+function waitForDocx(timeout = 10000) {
+  return new Promise((resolve, reject) => {
+    if (window.docx) { resolve(window.docx); return; }
+    const start = Date.now();
+    const timer = setInterval(() => {
+      if (window.docx) {
+        clearInterval(timer);
+        resolve(window.docx);
+      } else if (Date.now() - start > timeout) {
+        clearInterval(timer);
+        reject(new Error("docx.jsの読み込みがタイムアウトしました"));
+      }
+    }, 100);
+  });
+}
 function _renderTrialPDF(id, orgMember) {
   const cat = cats.find(c => c.id === id);
   if (!cat) return;
@@ -782,6 +797,15 @@ async function _renderTrialWord(id, orgMember) {
   const cat = cats.find(c => c.id === id);
   if (!cat) return;
   showLoading(true, "📝 Wordファイルを生成中...");
+  let docxLib;
+  try {
+    docxLib = await waitForDocx();
+  } catch(e) {
+    showLoading(false);
+    showToast("Word生成ライブラリの読み込みに失敗しました", "error");
+    return;
+  }
+  try {
   const tr    = cat.trial||{};
   const today = formatDateJP(new Date().toISOString().slice(0,10));
   const trialStart = formatDateJP(tr.startDate);
@@ -794,7 +818,7 @@ async function _renderTrialWord(id, orgMember) {
     `不妊手術：${cat.neutered?"済":"未"}`
   ];
   const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
-          AlignmentType, BorderStyle, WidthType, VerticalAlign } = docx;
+          AlignmentType, BorderStyle, WidthType, VerticalAlign } = docxLib;
 
   const noBorder = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
   const noBorders = { top:noBorder, bottom:noBorder, left:noBorder, right:noBorder };
@@ -901,6 +925,11 @@ async function _renderTrialWord(id, orgMember) {
   a.click();
   showLoading(false);
   showToast("📝 Wordファイルをダウンロードしました");
+} catch(e) {
+  showLoading(false);
+  showToast("Word生成に失敗しました: " + e.message, "error");
+  console.error("Word生成エラー:", e);
+}
 }
 
 // ── 正式譲渡契約書 Word ───────────────────────────────────
@@ -908,6 +937,15 @@ async function _renderFormalWord(id, orgMember) {
   const cat = cats.find(c => c.id === id);
   if (!cat) return;
   showLoading(true, "📝 Wordファイルを生成中...");
+  let docxLib;
+  try {
+    docxLib = await waitForDocx();
+  } catch(e) {
+    showLoading(false);
+    showToast("Word生成ライブラリの読み込みに失敗しました", "error");
+    return;
+  }
+  try {
   const tr    = cat.trial||{};
   const today = formatDateJP(new Date().toISOString().slice(0,10));
   const fee   = calcMedicalFee(cat).toLocaleString();
@@ -921,7 +959,7 @@ async function _renderFormalWord(id, orgMember) {
   ];
 
   const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
-          AlignmentType, BorderStyle, WidthType } = docx;
+          AlignmentType, BorderStyle, WidthType } = docxLib;
 
   const noBorder = { style:BorderStyle.NONE, size:0, color:"FFFFFF" };
   const noBorders = { top:noBorder, bottom:noBorder, left:noBorder, right:noBorder };
@@ -1023,6 +1061,11 @@ async function _renderFormalWord(id, orgMember) {
     p("【譲受人】",{bold:true,size:17,after:30}),
     signRow("住所",`${tr.zip||""} ${tr.address||""}`),
     space(30), signRow("氏名",""), signRow("電話",tr.tel||""),
+ catch(e) {
+  showLoading(false);
+  showToast("Word生成に失敗しました: " + e.message, "error");
+  console.error("Word生成エラー:", e);
+}
     space(60),
     p("【譲渡人】",{bold:true,size:17,after:30}),
     signRow("住所",orgZipAddr),
@@ -1037,6 +1080,11 @@ async function _renderFormalWord(id, orgMember) {
   a.click();
   showLoading(false);
   showToast("📝 Wordファイルをダウンロードしました");
+} catch(e) {
+  showLoading(false);
+  showToast("Word生成に失敗しました: " + e.message, "error");
+  console.error("Word生成エラー:", e);
+}
 }
 
 // ── 団体側メンバーをセレクトで選択（住所・電話のみ使用） ──
@@ -1999,22 +2047,6 @@ footer p{font-size:10px;color:rgba(255,255,255,.38);}
   </div>
 </div>
 
-<!-- 出力形式選択モーダル -->
-<div class="overlay" id="outputFormatOverlay" onclick="closeOutputFormat(event)">
-  <div style="background:white;border-radius:18px;max-width:340px;width:100%;padding:28px 24px;animation:modalIn .3s ease both;text-align:center;">
-    <div style="font-size:18px;font-weight:600;color:var(--brown);font-family:'Shippori Mincho',serif;margin-bottom:6px;" id="outputFormatTitle">出力形式を選択</div>
-    <div style="font-size:12px;color:var(--text-light);margin-bottom:22px;">PDFは印刷・保存向き、Wordは後から編集したい場合に</div>
-    <div style="display:flex;flex-direction:column;gap:10px;">
-      <button onclick="doOutput('pdf')" style="background:var(--caramel);color:white;border:none;border-radius:10px;padding:14px;font-family:'Zen Maru Gothic',sans-serif;font-size:14px;cursor:pointer;transition:background .2s;display:flex;align-items:center;justify-content:center;gap:8px;" onmouseover="this.style.background='var(--terracotta)'" onmouseout="this.style.background='var(--caramel)'">
-        <span style="font-size:18px;">📄</span> PDF（印刷・保存向き）
-      </button>
-      <button onclick="doOutput('word')" style="background:#2b579a;color:white;border:none;border-radius:10px;padding:14px;font-family:'Zen Maru Gothic',sans-serif;font-size:14px;cursor:pointer;transition:background .2s;display:flex;align-items:center;justify-content:center;gap:8px;" onmouseover="this.style.background='#1e3f6f'" onmouseout="this.style.background='#2b579a'">
-        <span style="font-size:18px;">📝</span> Word（後から編集可能）
-      </button>
-      <button onclick="closeOutputFormatDirect()" style="background:var(--sand);color:var(--text-mid);border:none;border-radius:10px;padding:10px;font-family:'Zen Maru Gothic',sans-serif;font-size:12px;cursor:pointer;margin-top:2px;">キャンセル</button>
-    </div>
-  </div>
-</div>
 
 <!-- LOGIN MODAL -->
 <div class="overlay" id="loginOverlay" onclick="closeLoginOverlayBg(event)">
@@ -2221,6 +2253,23 @@ footer p{font-size:10px;color:rgba(255,255,255,.38);}
         </div>
       </div>
 
+    </div>
+  </div>
+</div>
+
+<!-- 出力形式選択モーダル（最前面に配置） -->
+<div id="outputFormatOverlay" onclick="closeOutputFormat(event)" style="display:none;position:fixed;inset:0;background:rgba(40,25,15,.65);z-index:9999;align-items:center;justify-content:center;padding:20px;">
+  <div style="background:white;border-radius:18px;max-width:340px;width:100%;padding:28px 24px;animation:modalIn .3s ease both;text-align:center;">
+    <div style="font-size:18px;font-weight:600;color:var(--brown);font-family:'Shippori Mincho',serif;margin-bottom:6px;" id="outputFormatTitle">出力形式を選択</div>
+    <div style="font-size:12px;color:var(--text-light);margin-bottom:22px;">PDFは印刷・保存向き、Wordは後から編集したい場合に</div>
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <button onclick="doOutput('pdf')" style="background:var(--caramel);color:white;border:none;border-radius:10px;padding:14px;font-family:'Zen Maru Gothic',sans-serif;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;">
+        <span style="font-size:18px;">📄</span> PDF（印刷・保存向き）
+      </button>
+      <button onclick="doOutput('word')" style="background:#2b579a;color:white;border:none;border-radius:10px;padding:14px;font-family:'Zen Maru Gothic',sans-serif;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;">
+        <span style="font-size:18px;">📝</span> Word（後から編集可能）
+      </button>
+      <button onclick="closeOutputFormatDirect()" style="background:var(--sand);color:var(--text-mid);border:none;border-radius:10px;padding:10px;font-family:'Zen Maru Gothic',sans-serif;font-size:12px;cursor:pointer;margin-top:2px;">キャンセル</button>
     </div>
   </div>
 </div>
