@@ -805,7 +805,6 @@ async function _renderTrialWord(id, orgMember) {
     showToast("Word生成ライブラリの読み込みに失敗しました", "error");
     return;
   }
-  try {
   const tr    = cat.trial||{};
   const today = formatDateJP(new Date().toISOString().slice(0,10));
   const trialStart = formatDateJP(tr.startDate);
@@ -925,11 +924,6 @@ async function _renderTrialWord(id, orgMember) {
   a.click();
   showLoading(false);
   showToast("📝 Wordファイルをダウンロードしました");
-} catch(e) {
-  showLoading(false);
-  showToast("Word生成に失敗しました: " + e.message, "error");
-  console.error("Word生成エラー:", e);
-}
 }
 
 // ── 正式譲渡契約書 Word ───────────────────────────────────
@@ -945,7 +939,6 @@ async function _renderFormalWord(id, orgMember) {
     showToast("Word生成ライブラリの読み込みに失敗しました", "error");
     return;
   }
-  try {
   const tr    = cat.trial||{};
   const today = formatDateJP(new Date().toISOString().slice(0,10));
   const fee   = calcMedicalFee(cat).toLocaleString();
@@ -1061,11 +1054,6 @@ async function _renderFormalWord(id, orgMember) {
     p("【譲受人】",{bold:true,size:17,after:30}),
     signRow("住所",`${tr.zip||""} ${tr.address||""}`),
     space(30), signRow("氏名",""), signRow("電話",tr.tel||""),
- catch(e) {
-  showLoading(false);
-  showToast("Word生成に失敗しました: " + e.message, "error");
-  console.error("Word生成エラー:", e);
-}
     space(60),
     p("【譲渡人】",{bold:true,size:17,after:30}),
     signRow("住所",orgZipAddr),
