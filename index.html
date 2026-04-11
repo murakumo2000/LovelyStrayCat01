@@ -76,12 +76,14 @@ const db   = getFirestore(app);
 const auth = getAuth(app);
 
 // ─── State ──────────────────────────────────────────────
-let cats   = [];
-let events = [];
-let currentUser   = null;
-let currentFilter = "all";
-let editingCatId  = null;
+let cats     = [];
+let events   = [];
+let members  = [];
+let currentUser    = null;
+let currentFilter  = "all";
+let editingCatId   = null;
 let editingEventId = null;
+let editingMemberId = null;
 
 // ─── Firestore CRUD ─────────────────────────────────────
 async function loadCats() {
@@ -105,6 +107,45 @@ async function saveEventToDb(id, data) {
 }
 async function deleteEventFromDb(id) {
   await deleteDoc(doc(db, "events", id));
+}
+async function loadMembers() {
+  const snap = await getDocs(collection(db, "members"));
+  members = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+async function saveMemberToDb(id, data) {
+  await setDoc(doc(db, "members", id), data);
+}
+async function deleteMemberFromDb(id) {
+  await deleteDoc(doc(db, "members", id));
+}
+
+// 管理番号を自動採番：NRC-2025-001形式
+function generateCatNo() {
+  const year = new Date().getFullYear();
+  const used = cats.map(c => c.catNo||"").filter(n => n.startsWith(`NRC-${year}-`));
+  const nums = used.map(n => parseInt(n.split("-")[2]||0)).filter(n => !isNaN(n));
+  const next = nums.length ? Math.max(...nums) + 1 : 1;
+  return `NRC-${year}-${String(next).padStart(3,"0")}`;
+}
+
+// 誕生日から年齢文字列を自動計算
+function calcAgeFromBirthday(birthday) {
+  if (!birthday) return "";
+  const birth = new Date(birthday);
+  const now   = new Date();
+  let months  = (now.getFullYear() - birth.getFullYear()) * 12 + (now.getMonth() - birth.getMonth());
+  if (now.getDate() < birth.getDate()) months--;
+  if (months < 0) months = 0;
+  if (months < 12) return `推定 ${toZenkaku(String(months))}ヶ月`;
+  const years = Math.floor(months / 12);
+  return `推定 ${toZenkaku(String(years))}歳`;
+}
+
+// 医療費協力金を不妊状況から自動計算
+function calcMedicalFee(cat) {
+  if (!cat.neutered) return 18000; // 未不妊
+  if (cat.gender === "male")   return 20000; // 去勢済
+  return 25000; // 避妊済
 }
 
 // ─── Cloudinary アップロード ─────────────────────────────
@@ -145,7 +186,7 @@ window.doSignOut = async () => {
 };
 
 // ─── Helpers ────────────────────────────────────────────
-const statusLabel = { available:"募集中", pending:"応募検討中", adopted:"譲渡済み" };
+const statusLabel = { available:"募集中", trial:"トライアル中", pending:"応募検討中", adopted:"譲渡済み" };
 
 function vc(done, label) {
   return `<div class="vc ${done?"done":"pend"}"><div class="dot"></div>${label}${done?"済":"未"}</div>`;
@@ -377,12 +418,313 @@ window.openAdmin = () => {
 function openAdminPanel() {
   renderAdminCats();
   renderAdminEvents();
+  renderAdminMembers();
+  renderMemberSelect();
   document.getElementById("adminOverlay").classList.add("open");
   document.body.style.overflow = "hidden";
 }
 
 window.closeAdmin    = () => { document.getElementById("adminOverlay").classList.remove("open"); document.body.style.overflow=""; };
 window.closeAdminBg  = e  => { if(e.target===document.getElementById("adminOverlay")) window.closeAdmin(); };
+
+// ── メンバーセレクトを描画 ──
+function renderMemberSelect() {
+  const sel = document.getElementById("f_memberId");
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = '<option value="">（未設定）</option>'
+    + members.map(m => `<option value="${m.id}" ${m.id===current?"selected":""}>${m.name}</option>`).join("");
+}
+
+// ── Admin: メンバーリスト ──
+function renderAdminMembers() {
+  const list = document.getElementById("adminMemberList");
+  if (!list) return;
+  list.innerHTML = "";
+  members.forEach(m => {
+    const item = document.createElement("div");
+    item.className = "admin-cat-item";
+    item.innerHTML = `
+      <div class="admin-cat-thumb-ph" style="font-size:18px;">👤</div>
+      <div class="admin-cat-info">
+        <div class="admin-cat-name">${m.name}</div>
+        <div class="admin-cat-meta">${m.tel||""} ／ ${m.email||""}</div>
+      </div>
+      <div class="admin-cat-actions">
+        <button class="abtn edit" onclick="editMember('${m.id}')">編集</button>
+        <button class="abtn del"  onclick="deleteMember('${m.id}')">削除</button>
+      </div>`;
+    list.appendChild(item);
+  });
+  document.getElementById("memberCount").textContent = `登録数：${members.length}名`;
+}
+
+window.editMember = id => {
+  const m = members.find(x => x.id === id);
+  if (!m) return;
+  switchTab("memberform", document.querySelectorAll(".admin-tab")[5]);
+  editingMemberId = id;
+  document.getElementById("memberFormTitle").textContent = `「${m.name}」を編集`;
+  document.getElementById("m_name").value    = m.name||"";
+  document.getElementById("m_zip").value     = m.zip||"";
+  document.getElementById("m_address").value = m.address||"";
+  document.getElementById("m_tel").value     = m.tel||"";
+  document.getElementById("m_email").value   = m.email||"";
+};
+
+window.deleteMember = async id => {
+  const m = members.find(x => x.id === id);
+  if (!m || !confirm(`「${m.name}」を削除しますか？`)) return;
+  try {
+    showLoading(true);
+    await deleteMemberFromDb(id);
+    members = members.filter(x => x.id !== id);
+    renderAdminMembers();
+    showToast("削除しました");
+  } catch(e) { showToast("削除に失敗しました","error"); }
+  finally { showLoading(false); }
+};
+
+function resetMemberForm() {
+  editingMemberId = null;
+  document.getElementById("memberFormTitle").textContent = "新しいメンバーを登録";
+  ["m_name","m_zip","m_address","m_tel","m_email"]
+    .forEach(id => { const el=document.getElementById(id); if(el) el.value=""; });
+}
+
+window.cancelMemberEdit = () => {
+  resetMemberForm();
+  switchTab("members", document.querySelectorAll(".admin-tab")[4]);
+  renderAdminMembers();
+};
+
+window.saveMember = async () => {
+  const name = document.getElementById("m_name").value.trim();
+  if (!name) { showToast("名前を入力してください","error"); return; }
+  const id   = editingMemberId || `mbr_${Date.now()}`;
+  const data = {
+    name,
+    zip:     document.getElementById("m_zip").value.trim(),
+    address: document.getElementById("m_address").value.trim(),
+    tel:     document.getElementById("m_tel").value.trim(),
+    email:   document.getElementById("m_email").value.trim(),
+  };
+  try {
+    showLoading(true);
+    await saveMemberToDb(id, data);
+    if (editingMemberId) {
+      const idx = members.findIndex(x => x.id === editingMemberId);
+      if (idx >= 0) members[idx] = { id, ...data };
+    } else {
+      members.push({ id, ...data });
+    }
+    showToast(`「${name}」を${editingMemberId?"更新":"登録"}しました ✅`);
+    window.cancelMemberEdit();
+  } catch(e) { showToast("保存に失敗しました","error"); }
+  finally { showLoading(false); }
+};
+
+// ── 契約書出力 ──
+function getOrgInfo() {
+  return {
+    name:    "愛すべき野良猫の会　代表　佐藤 美紀",
+    zip:     "〒982-0023",
+    address: "宮城県仙台市太白区鹿野２−５−１４",
+    tel:     "090-5180-6080"
+  };
+}
+
+function formatDateJP(dateStr) {
+  if (!dateStr) return "　　　　年　　月　　日";
+  const d = new Date(dateStr);
+  return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日`;
+}
+
+window.printTrialContract = id => {
+  const cat = cats.find(c => c.id === id);
+  if (!cat) return;
+  const tr  = cat.trial||{};
+  const org = getOrgInfo();
+  const today = formatDateJP(new Date().toISOString().slice(0,10));
+  const medInfo = [
+    `エイズ・白血病：陰性`,
+    `３種混合ワクチン接種：${cat.vaccine?.triple?"済":"未"}${cat.vaccine?.tripleDate?" (最終日"+formatDateJP(cat.vaccine.tripleDate)+")":""}`,
+    `ノミ・ダニ駆除・駆虫：${cat.flea?"済":"未"}`,
+    `不妊手術：${cat.neutered?"済":"未"}`
+  ].join("\n");
+  const trialStart = formatDateJP(tr.startDate);
+  const trialEnd   = tr.endDate ? formatDateJP(tr.endDate) : "　　　　年　　月　　日";
+  const html = `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8">
+<title>トライアル契約書</title>
+<style>
+  body{font-family:'MS Mincho','游明朝',serif;font-size:11pt;line-height:1.8;margin:0;padding:0;}
+  .page{width:210mm;min-height:297mm;margin:0 auto;padding:20mm 18mm;box-sizing:border-box;}
+  h1{text-align:center;font-size:16pt;margin-bottom:16pt;letter-spacing:.2em;}
+  .date{text-align:right;margin-bottom:8pt;}
+  .info-table{width:100%;border-collapse:collapse;margin-bottom:12pt;font-size:10.5pt;}
+  .info-table td{padding:2pt 6pt;vertical-align:top;}
+  .info-table .label{width:5em;white-space:nowrap;}
+  .period{margin:10pt 0;font-size:11pt;}
+  .section-title{text-align:center;font-size:11pt;margin:12pt 0 6pt;font-weight:bold;}
+  ol{margin:0;padding-left:2em;}
+  ol li{margin-bottom:4pt;font-size:10.5pt;}
+  .closing{text-align:center;margin:16pt 0 8pt;font-size:10.5pt;}
+  .note{color:red;font-size:10pt;text-align:center;margin:4pt 0;}
+  .sign-block{margin-top:16pt;}
+  .sign-row{display:flex;gap:24pt;margin-bottom:6pt;}
+  .sign-label{width:3em;}
+  .sign-line{flex:1;border-bottom:1px solid #000;min-width:120pt;}
+  .fee-block{text-align:center;margin-top:14pt;font-size:10pt;line-height:1.9;}
+  .red{color:red;}
+  @media print{body{margin:0;}@page{size:A4;margin:0;}}
+</style></head><body>
+<div class="page">
+  <h1>トライアル契約書</h1>
+  <div class="date">${today}</div>
+  <div style="font-weight:bold;margin-bottom:4pt;">【譲渡予定動物】</div>
+  <table class="info-table">
+    <tr><td class="label">種別</td><td>猫</td><td class="label">仮名</td><td>${cat.name}</td></tr>
+    <tr><td class="label">月齢</td><td>${cat.age}</td><td class="label">性別</td><td>${cat.gender==="male"?"♂":"♀"}</td></tr>
+    <tr><td class="label">医療</td><td colspan="3" style="white-space:pre-line;">${medInfo}</td></tr>
+  </table>
+  <div class="period">トライアル期間　${trialStart}　〜　${trialEnd}</div>
+  <div class="section-title">トライアル期間中の約束事項</div>
+  <ol>
+    <li>トライアルは、譲渡予定動物にとって飼育環境が適正であるかを、保護主が確認する為に行うものである。</li>
+    <li>保護主から里親予定者に対し飼育状況の改善要求がなされた場合には、譲渡予定動物の飼育にふさわしい環境を整える。</li>
+    <li>里親予定者は保護主からの譲渡予定動物の<span class="red">写真・動画</span>、面会請求に応じなければならない。</li>
+    <li>里親予定者は、いかなる理由においても保護主の譲渡予定動物の<span class="red">返還要求</span>に応じなければならない。</li>
+    <li>里親予定者は、譲渡予定動物を放し飼いにする事なく<span class="red">完全室内飼い</span>で管理する。</li>
+    <li>万が一、譲渡予定動物を脱走させてしまった場合、里親予定者は速やかに保護主に連絡し、責任を持って探し出さなければならない。捜索に係る費用は里親予定者の負担とする。</li>
+    <li>里親予定者は、譲渡予定動物を飼育できない状況になった場合、速やかに保護主に報告し譲渡予定動物を返還する。</li>
+    <li>譲渡予定動物の給餌、給水および衛生管理に係る費用は、里親予定者の費用とする。</li>
+    <li>譲渡予定動物に医療行為を受けさせる場合、里親予定者は速やかに保護主に相談する。譲渡予定動物の<span class="red">病気</span>にかかる診断、治療に係る費用については<span class="red">保護主の負担</span>とする。ただし、里親予定者の過失による怪我や事故に関しては里親予定者の負担とする。</li>
+  </ol>
+  <div class="closing">上記の内容を理解、納得し、トライアルを開始致します。<br>本契約書は、仮契約となる為、トライアル期間のみ有効とさせて頂きます。</div>
+  <div class="note">※貸し出しケージ・トイレはトライアル終了時に返却となります。</div>
+  <div style="text-align:center;font-size:10pt;">尚、解体される際は上段・下段のみの解体でお願い致します。<br>前後左右の連結は外さないようご注意下さい。</div>
+  <div class="sign-block">
+    <div class="sign-row"><div class="sign-label">氏名</div><div class="sign-line">${tr.name||""}</div></div>
+    <div class="sign-row"><div class="sign-label">電話</div><div class="sign-line">${tr.tel||""}</div></div>
+    <div style="margin-top:10pt;">
+      <div class="sign-row"><div class="sign-label">氏名</div><div class="sign-line">${org.name}</div></div>
+      <div class="sign-row"><div class="sign-label">電話</div><div class="sign-line">${org.tel}</div></div>
+    </div>
+  </div>
+  <div class="fee-block">
+    保護猫たちには必要な医療を施した上で譲渡しております。<br>
+    正式譲渡の際には医療費の一部負担として<br>
+    去勢済20,000円・避妊済25,000円・未不妊18,000円の<br>
+    医療費協力金のご協力をお願いしております。
+  </div>
+</div>
+</body></html>`;
+  const w = window.open("","_blank");
+  w.document.write(html);
+  w.document.close();
+  setTimeout(()=>w.print(), 600);
+};
+
+window.printFormalContract = id => {
+  const cat = cats.find(c => c.id === id);
+  if (!cat) return;
+  const tr   = cat.trial||{};
+  const org  = getOrgInfo();
+  const today = formatDateJP(new Date().toISOString().slice(0,10));
+  const fee   = calcMedicalFee(cat).toLocaleString();
+  const medInfo = [
+    `エイズ・白血病：陰性${cat.vaccine?.leukemiaDate?" (最終日"+formatDateJP(cat.vaccine.leukemiaDate)+")":""}`,
+    `３種混合ワクチン接種：${cat.vaccine?.triple?"１回":"未"}${cat.vaccine?.tripleDate?" (最終日"+formatDateJP(cat.vaccine.tripleDate)+")":""}`,
+    `ノミ・ダニ駆除・駆虫${cat.flea?"済":"未"}`,
+    `${cat.neutered?"去勢済":"未去勢"}`
+  ].join("\n");
+  const photoTag = cat.img
+    ? `<img src="${cat.img}" style="width:80pt;height:80pt;object-fit:cover;border:1px solid #ccc;">`
+    : `<div style="width:80pt;height:80pt;border:1px solid #ccc;display:flex;align-items:center;justify-content:center;font-size:8pt;">写真</div>`;
+  const html = `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8">
+<title>正式譲渡契約書</title>
+<style>
+  body{font-family:'MS Mincho','游明朝',serif;font-size:11pt;line-height:1.8;margin:0;padding:0;}
+  .page{width:210mm;min-height:297mm;margin:0 auto;padding:18mm 18mm;box-sizing:border-box;}
+  h1{text-align:center;font-size:16pt;margin-bottom:12pt;letter-spacing:.2em;}
+  .date{text-align:right;margin-bottom:8pt;}
+  .header-block{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10pt;}
+  .info-table{border-collapse:collapse;font-size:10.5pt;}
+  .info-table td{padding:2pt 6pt;vertical-align:top;}
+  .info-table .label{width:5em;white-space:nowrap;}
+  .pledge{margin:10pt 0 6pt;font-size:10.5pt;}
+  ol{margin:0;padding-left:2em;}
+  ol li{margin-bottom:3pt;font-size:10pt;}
+  .closing{margin:12pt 0;font-size:10.5pt;line-height:1.9;}
+  .sign-section{margin-top:14pt;font-size:10.5pt;}
+  .sign-block{margin-bottom:10pt;padding:6pt;border:1px solid #999;}
+  .sign-block-title{font-weight:bold;margin-bottom:4pt;}
+  .sign-row{display:flex;gap:12pt;margin-bottom:3pt;}
+  .sign-label{width:4em;flex-shrink:0;}
+  .sign-value{flex:1;border-bottom:1px solid #000;min-width:120pt;}
+  .stamp{display:inline-block;width:28pt;height:28pt;border:1px solid #000;border-radius:50%;margin-left:8pt;vertical-align:middle;}
+  @media print{body{margin:0;}@page{size:A4;margin:0;}}
+</style></head><body>
+<div class="page">
+  <h1>正式譲渡契約書</h1>
+  <div class="date">${today}</div>
+  <div style="font-weight:bold;margin-bottom:4pt;">【譲渡動物】</div>
+  <div class="header-block">
+    <table class="info-table">
+      <tr><td class="label">種別</td><td>猫　１頭</td></tr>
+      <tr><td class="label">月齢</td><td>${cat.age}</td></tr>
+      <tr><td class="label">体重</td><td>${cat.weight||""}</td></tr>
+      <tr><td class="label">誕生日</td><td>${cat.birthday ? formatDateJP(cat.birthday) : ""}</td></tr>
+      <tr><td class="label">毛色</td><td>${cat.color||""}</td></tr>
+      <tr><td class="label">性別</td><td>${cat.gender==="male"?"♂":"♀"}</td></tr>
+      <tr><td class="label">仮名</td><td>${cat.name}　[正式名]　${cat.formalName||"　　　　　"}</td></tr>
+      <tr><td class="label">医療</td><td style="white-space:pre-line;">${medInfo}</td></tr>
+    </table>
+    ${photoTag}
+  </div>
+  <div class="pledge">私は上記の猫を譲り受けるにあたり、下記事項を誓約致します。</div>
+  <ol>
+    <li>譲渡された猫を共に生きる伴侶・家族として、最後まで責任を持って愛育します。</li>
+    <li>事故・感染症・迷子・虐待等を防ぐため、完全室内飼いをします。</li>
+    <li>脱走防止に留意し、防止対策を施したうえで、必要に応じてケージ等を利用します。</li>
+    <li>脱走した場合は、下記明記人に一報の上、早急な保護に努めます。</li>
+    <li>適切な給餌管理・健康管理を行い、事故や病気の場合は速やかに適切な医療を受けさせます。</li>
+    <li>譲渡猫に抜爪手術はしません。また虐待や殺傷等本猫を傷つける行為も絶対に行いません。</li>
+    <li>感染症予防のために動物病院と相談の上、１年に一度のワクチン接種を受けます。</li>
+    <li>本猫の様子を適宜、画像付きでお知らせします。</li>
+    <li>本猫を譲渡者の承諾なしに第三者に譲ったり、誓約書表記の住所以外での飼育はしません。</li>
+    <li>引越しなどで住所や電話番号が変更する場合、速やかに譲渡人にお知らせします。</li>
+    <li>本猫を第三者に譲渡する必要が出てきた場合、速やかに譲渡人に相談の上必ず新しい飼い主の氏名・住所・連絡先を開示します。</li>
+    <li>譲渡後に発見された病気等があっても、自己が責任を持って飼育します。</li>
+    <li>万が一、本猫について、譲渡人だけでは判断できない状況、状態が生じた場合、必ず譲渡人に連絡・相談します。</li>
+  </ol>
+  <div class="closing">
+    トライアル期間を無事終了し、双方問題がないと判断し正式譲渡と致します。<br>
+    また、正式譲渡の後でも、飼育不適切と判断された場合、または譲渡人との信頼関係が継続困難と判断した場合は、譲渡人が引き取る権利を有します。<br><br>
+    本誓約書は２通作成し、譲渡人・譲受人双方がそれぞれ１通ずつ本猫が死亡するまで保管します。<br>
+    本誓約書を以って、医療費一部ご協力金　金<strong>${fee}円</strong>　の領収書に代えさせて頂きます。
+  </div>
+  <div class="sign-section">
+    <div class="sign-block">
+      <div class="sign-block-title">【譲受人】</div>
+      <div class="sign-row"><div class="sign-label">住所</div><div class="sign-value">${tr.zip||""} ${tr.address||""}</div></div>
+      <div class="sign-row"><div class="sign-label">氏名</div><div class="sign-value">${tr.name||""}</div><span class="stamp">印</span></div>
+      <div class="sign-row"><div class="sign-label">電話</div><div class="sign-value">${tr.tel||""}</div></div>
+    </div>
+    <div class="sign-block">
+      <div class="sign-block-title">【譲渡人】</div>
+      <div class="sign-row"><div class="sign-label">住所</div><div class="sign-value">${org.zip} ${org.address}</div></div>
+      <div class="sign-row"><div class="sign-label">氏名</div><div class="sign-value">${org.name}</div><span class="stamp">印</span></div>
+      <div class="sign-row"><div class="sign-label">電話</div><div class="sign-value">${org.tel}</div></div>
+    </div>
+  </div>
+</div>
+</body></html>`;
+  const w = window.open("","_blank");
+  w.document.write(html);
+  w.document.close();
+  setTimeout(()=>w.print(), 600);
+};
 
 window.switchTab = (name, btn) => {
   document.querySelectorAll(".admin-tab").forEach(t => t.classList.remove("active"));
@@ -391,6 +733,8 @@ window.switchTab = (name, btn) => {
   document.getElementById("tab-"+name).classList.add("active");
   if (name === "catform")   { resetCatForm(); }
   if (name === "eventform") { resetEventForm(); renderCatSelector([]); }
+  if (name === "memberform") { resetMemberForm(); }
+  if (name === "members")   { renderAdminMembers(); }
 };
 
 // ── Admin: ログイン ──
@@ -429,13 +773,15 @@ function renderAdminCats() {
     item.innerHTML = `
       ${th}
       <div class="admin-cat-info">
-        <div class="admin-cat-name">${cat.name} <span style="font-size:9px;color:var(--text-light);">${cat.ruby||""}</span></div>
-        <div class="admin-cat-meta">${cat.breed} ／ ${cat.age} ／ ${cat.gender==="female"?"♀":"♂"} ／ ${statusLabel[cat.status]||cat.status}</div>
+        <div class="admin-cat-name">${cat.catNo ? `<span style="font-size:10px;color:var(--caramel);margin-right:4px;">${cat.catNo}</span>` : ""}${cat.name} <span style="font-size:9px;color:var(--text-light);">${cat.ruby||""}</span></div>
+        <div class="admin-cat-meta">${cat.breed} ／ ${cat.age} ／ ${cat.gender==="female"?"♀":"♂"} ／ ${statusLabel[cat.status]||cat.status}${cat.memberId ? " ／ 👤"+( members.find(m=>m.id===cat.memberId)?.name||"") : ""}</div>
       </div>
-      <div class="admin-cat-actions">
+      <div class="admin-cat-actions" style="flex-wrap:wrap;gap:4px;">
         <button class="abtn ${vis?"vis-on":"vis-off"}" onclick="toggleCatVis('${cat.id}')">${vis?"表示中":"非表示"}</button>
         <button class="abtn edit" onclick="editCat('${cat.id}')">編集</button>
         <button class="abtn del"  onclick="deleteCat('${cat.id}')">削除</button>
+        <button class="abtn" style="background:#e8f0fe;color:#3a6bc4;" onclick="printTrialContract('${cat.id}')">📄 TA</button>
+        <button class="abtn" style="background:#e8f5e4;color:#3a7a4a;" onclick="printFormalContract('${cat.id}')">📄 正式</button>
       </div>`;
     list.appendChild(item);
   });
@@ -476,17 +822,17 @@ window.editCat = id => {
   switchTab("catform", document.querySelectorAll(".admin-tab")[1]);
   editingCatId = id;
   document.getElementById("catFormTitle").textContent = `「${cat.name}」を編集`;
-  document.getElementById("f_name").value        = cat.name||"";
-  document.getElementById("f_ruby").value        = cat.ruby||"";
-  document.getElementById("f_breed").value       = cat.breed||"";
-  document.getElementById("f_color").value       = cat.color||"";
-  document.getElementById("f_gender").value      = cat.gender||"female";
-  document.getElementById("f_age").value         = cat.age||"";
-  document.getElementById("f_ageGroup").value    = cat.ageGroup||"adult";
-  document.getElementById("f_weight").value      = cat.weight||"";
-  document.getElementById("f_status").value      = cat.status||"available";
-  document.getElementById("f_area").value        = cat.area||"";
-  // 年齢を数値と単位に分解してセット
+  document.getElementById("f_name").value         = cat.name||"";
+  document.getElementById("f_formalName").value   = cat.formalName||"";
+  document.getElementById("f_ruby").value         = cat.ruby||"";
+  document.getElementById("f_breed").value        = cat.breed||"";
+  document.getElementById("f_color").value        = cat.color||"";
+  document.getElementById("f_gender").value       = cat.gender||"female";
+  document.getElementById("f_birthday").value     = cat.birthday||"";
+  document.getElementById("f_ageGroup").value     = cat.ageGroup||"adult";
+  document.getElementById("f_status").value       = cat.status||"available";
+  document.getElementById("f_area").value         = cat.area||"";
+  document.getElementById("f_memberId").value     = cat.memberId||"";
   const ageMatch = (cat.age||"").match(/(\d+[\d.,]*)(ヶ月|歳)/);
   if (ageMatch) {
     document.getElementById("f_age_num").value  = toHankaku(ageMatch[1]);
@@ -495,19 +841,29 @@ window.editCat = id => {
     document.getElementById("f_age_num").value  = "";
     document.getElementById("f_age_unit").value = "歳";
   }
-  // 体重を数値のみにしてセット
   const weightMatch = (cat.weight||"").match(/([\d.,０-９]+)/);
-  document.getElementById("f_weight_num").value = weightMatch ? toHankaku(weightMatch[1]) : "";
+  document.getElementById("f_weight_num").value  = weightMatch ? toHankaku(weightMatch[1]) : "";
   document.getElementById("f_personality").value = (cat.personality||[]).join(",");
-  document.getElementById("f_tags").value        = (cat.tags||[]).join(",");
-  document.getElementById("f_comment").value     = cat.comment||"";
-  document.getElementById("f_health").value      = cat.health||"";
-  document.getElementById("f_v_triple").checked  = !!(cat.vaccine?.triple);
-  document.getElementById("f_v_rabies").checked  = !!(cat.vaccine?.rabies);
-  document.getElementById("f_v_leukemia").checked= !!(cat.vaccine?.leukemia);
-  document.getElementById("f_neutered").checked  = !!cat.neutered;
-  document.getElementById("f_microchip").checked = !!cat.microchip;
-  // 画像プレビュー
+  document.getElementById("f_tags").value         = (cat.tags||[]).join(",");
+  document.getElementById("f_comment").value      = cat.comment||"";
+  document.getElementById("f_health").value       = cat.health||"";
+  document.getElementById("f_v_triple").checked   = !!(cat.vaccine?.triple);
+  document.getElementById("f_v_triple_date").value = cat.vaccine?.tripleDate||"";
+  document.getElementById("f_v_rabies").checked   = !!(cat.vaccine?.rabies);
+  document.getElementById("f_v_leukemia").checked  = !!(cat.vaccine?.leukemia);
+  document.getElementById("f_v_leukemia_date").value = cat.vaccine?.leukemiaDate||"";
+  document.getElementById("f_neutered").checked   = !!cat.neutered;
+  document.getElementById("f_flea").checked       = !!cat.flea;
+  document.getElementById("f_microchip").checked  = !!cat.microchip;
+  const tr = cat.trial||{};
+  document.getElementById("f_trial_name").value    = tr.name||"";
+  document.getElementById("f_trial_zip").value     = tr.zip||"";
+  document.getElementById("f_trial_address").value = tr.address||"";
+  document.getElementById("f_trial_tel").value     = tr.tel||"";
+  document.getElementById("f_trial_email").value   = tr.email||"";
+  document.getElementById("f_trial_start").value   = tr.startDate||"";
+  document.getElementById("f_trial_end").value     = tr.endDate||"";
+  renderMemberSelect();
   document.getElementById("f_imgUrl").value = cat.img||"";
   if (cat.img) showImgPreview(cat.img); else hideImgPreview();
   _pendingImgFile = null;
@@ -516,16 +872,23 @@ window.editCat = id => {
 function resetCatForm() {
   editingCatId = null;
   document.getElementById("catFormTitle").textContent = "新しい子を登録";
-  ["f_name","f_ruby","f_breed","f_color","f_area",
+  ["f_name","f_formalName","f_ruby","f_breed","f_color","f_area",
    "f_personality","f_tags","f_comment","f_health","f_imgUrl",
-   "f_age_num","f_weight_num"].forEach(id => document.getElementById(id).value="");
+   "f_age_num","f_weight_num","f_birthday",
+   "f_v_triple_date","f_v_leukemia_date",
+   "f_trial_name","f_trial_zip","f_trial_address",
+   "f_trial_tel","f_trial_email","f_trial_start","f_trial_end"
+  ].forEach(id => { const el=document.getElementById(id); if(el) el.value=""; });
   document.getElementById("f_age_unit").value  = "歳";
-  document.getElementById("f_gender").value   = "female";
-  document.getElementById("f_ageGroup").value = "adult";
-  document.getElementById("f_status").value   = "available";
-  ["f_v_triple","f_v_rabies","f_v_leukemia","f_neutered","f_microchip"].forEach(id => document.getElementById(id).checked=false);
+  document.getElementById("f_gender").value    = "female";
+  document.getElementById("f_ageGroup").value  = "adult";
+  document.getElementById("f_status").value    = "available";
+  document.getElementById("f_memberId").value  = "";
+  ["f_v_triple","f_v_rabies","f_v_leukemia","f_neutered","f_flea","f_microchip"]
+    .forEach(id => { const el=document.getElementById(id); if(el) el.checked=false; });
   _pendingImgFile = null;
   hideImgPreview();
+  renderMemberSelect();
 }
 
 window.cancelCatEdit = () => { resetCatForm(); switchTab("cats", document.querySelectorAll(".admin-tab")[0]); renderAdminCats(); };
@@ -542,33 +905,57 @@ window.saveCat = async () => {
     }
     const ageNum  = document.getElementById("f_age_num").value.trim();
     const ageUnit = document.getElementById("f_age_unit").value;
-    const ageStr  = ageNum ? `推定 ${toZenkaku(ageNum)}${ageUnit}` : "不明";
     const weightNum = document.getElementById("f_weight_num").value.trim();
     const weightStr = weightNum ? `${toZenkaku(weightNum)}kg` : "";
-    const id   = editingCatId || `cat_${Date.now()}`;
+    const id      = editingCatId || `cat_${Date.now()}`;
+    // 誕生日が入力されていれば年齢を自動計算、なければ手入力値を使用
+    const birthday = document.getElementById("f_birthday").value;
+    const ageStr   = birthday ? calcAgeFromBirthday(birthday)
+                              : (ageNum ? `推定 ${toZenkaku(ageNum)}${ageUnit}` : "不明");
+    // 管理番号：新規は自動採番、編集時は既存を維持
+    const existingCat = editingCatId ? cats.find(c => c.id === editingCatId) : null;
+    const catNo = existingCat?.catNo || generateCatNo();
     const data = {
-      name, ruby: document.getElementById("f_ruby").value.trim(),
-      img: imgUrl,
-      gender:    document.getElementById("f_gender").value,
-      age:       ageStr,
-      ageGroup:  document.getElementById("f_ageGroup").value,
-      breed:     document.getElementById("f_breed").value.trim()||"不明",
-      color:     document.getElementById("f_color").value.trim(),
-      weight:    weightStr,
-      personality: document.getElementById("f_personality").value.split(",").map(s=>s.trim()).filter(Boolean),
-      tags:        document.getElementById("f_tags").value.split(",").map(s=>s.trim()).filter(Boolean),
-      comment:   document.getElementById("f_comment").value.trim(),
-      status:    document.getElementById("f_status").value,
+      catNo,
+      name,
+      formalName:   document.getElementById("f_formalName").value.trim(),
+      ruby:         document.getElementById("f_ruby").value.trim(),
+      img:          imgUrl,
+      gender:       document.getElementById("f_gender").value,
+      birthday,
+      age:          ageStr,
+      ageGroup:     document.getElementById("f_ageGroup").value,
+      breed:        document.getElementById("f_breed").value.trim()||"不明",
+      color:        document.getElementById("f_color").value.trim(),
+      weight:       weightStr,
+      memberId:     document.getElementById("f_memberId").value,
+      personality:  document.getElementById("f_personality").value.split(",").map(s=>s.trim()).filter(Boolean),
+      tags:         document.getElementById("f_tags").value.split(",").map(s=>s.trim()).filter(Boolean),
+      comment:      document.getElementById("f_comment").value.trim(),
+      status:       document.getElementById("f_status").value,
       vaccine: {
         triple:   document.getElementById("f_v_triple").checked,
         rabies:   document.getElementById("f_v_rabies").checked,
-        leukemia: document.getElementById("f_v_leukemia").checked
+        leukemia: document.getElementById("f_v_leukemia").checked,
+        tripleDate:   document.getElementById("f_v_triple_date").value,
+        leukemiaDate: document.getElementById("f_v_leukemia_date").value,
       },
       neutered:  document.getElementById("f_neutered").checked,
+      flea:      document.getElementById("f_flea").checked,
       microchip: document.getElementById("f_microchip").checked,
       health:    document.getElementById("f_health").value.trim(),
       area:      document.getElementById("f_area").value.trim(),
-      visible:   true
+      // トライアル情報（非公開）
+      trial: {
+        name:      document.getElementById("f_trial_name").value.trim(),
+        zip:       document.getElementById("f_trial_zip").value.trim(),
+        address:   document.getElementById("f_trial_address").value.trim(),
+        tel:       document.getElementById("f_trial_tel").value.trim(),
+        email:     document.getElementById("f_trial_email").value.trim(),
+        startDate: document.getElementById("f_trial_start").value,
+        endDate:   document.getElementById("f_trial_end").value,
+      },
+      visible: true
     };
     await saveCatToDb(id, data);
     if (editingCatId) {
@@ -816,7 +1203,7 @@ function formatDateTime(iso) {
 (async () => {
   showLoading(true);
   try {
-    await Promise.all([loadCats(), loadEvents(), loadUpdates()]);
+    await Promise.all([loadCats(), loadEvents(), loadUpdates(), loadMembers()]);
   } catch(e) {
     showToast("データの読み込みに失敗しました","error");
   } finally {
@@ -914,7 +1301,7 @@ nav a:hover{color:var(--caramel);}
 .cat-badge{position:absolute;top:11px;left:11px;background:white;border-radius:100px;padding:3px 9px;font-size:10px;font-weight:500;box-shadow:0 2px 7px var(--shadow);}
 .cat-badge.female{color:#c07070;}.cat-badge.male{color:#6080b0;}
 .cat-status{position:absolute;top:11px;right:11px;padding:3px 9px;border-radius:100px;font-size:10px;font-weight:500;}
-.cat-status.available{background:#e8f5e4;color:var(--sage);}.cat-status.pending{background:#fff3e0;color:#e0903a;}.cat-status.adopted{background:#eee;color:#999;}
+.cat-status.available{background:#e8f5e4;color:var(--sage);}.cat-status.trial{background:#e8f0fe;color:#3a6bc4;}.cat-status.pending{background:#fff3e0;color:#e0903a;}.cat-status.adopted{background:#eee;color:#999;}
 .cat-body{padding:16px 18px 18px;}
 .cat-name{font-family:'Shippori Mincho',serif;font-size:19px;font-weight:600;color:var(--brown);}
 .cat-name-ruby{font-size:10px;color:var(--text-light);letter-spacing:0.13em;margin-bottom:10px;}
@@ -1310,6 +1697,8 @@ footer p{font-size:10px;color:rgba(255,255,255,.38);}
         <button class="admin-tab" onclick="switchTab('catform',this)">➕ 猫を登録・編集</button>
         <button class="admin-tab" onclick="switchTab('events',this)">📅 譲渡会の管理</button>
         <button class="admin-tab" onclick="switchTab('eventform',this)">➕ 譲渡会を登録・編集</button>
+        <button class="admin-tab" onclick="switchTab('members',this)">👤 メンバー管理</button>
+        <button class="admin-tab" onclick="switchTab('memberform',this)">➕ メンバーを登録・編集</button>
       </div>
 
       <!-- 猫リスト -->
@@ -1322,30 +1711,57 @@ footer p{font-size:10px;color:rgba(255,255,255,.38);}
       <!-- 猫フォーム -->
       <div class="tab-content" id="tab-catform">
         <div id="catFormTitle" style="font-size:14px;font-weight:500;color:var(--brown);margin-bottom:12px;">新しい子を登録</div>
+        <div style="font-size:11px;color:var(--caramel);background:#fff8f0;border:1px solid #f0d8c0;border-radius:8px;padding:8px 12px;margin-bottom:12px;">
+          🔒 管理番号・正式名・担当者・トライアル情報は非公開です（管理パネルのみ表示）
+        </div>
         <div class="form-grid">
-          <div class="form-group"><label>名前</label><input type="text" id="f_name" placeholder="例：こむぎ"></div>
+          <!-- 管理番号（自動） -->
+          <div class="form-group">
+            <label>管理番号（自動採番）</label>
+            <input type="text" id="f_catNo" placeholder="保存時に自動設定" disabled style="background:#eee;color:#999;">
+          </div>
+          <div class="form-group"><label>仮名（公開）</label><input type="text" id="f_name" placeholder="例：こむぎ"></div>
+          <div class="form-group"><label>🔒 正式名（非公開）</label><input type="text" id="f_formalName" placeholder="例：グラン"></div>
           <div class="form-group"><label>よみがな / ローマ字</label><input type="text" id="f_ruby" placeholder="例：Komugi"></div>
           <div class="form-group"><label>品種</label><input type="text" id="f_breed" placeholder="例：キジ白"></div>
           <div class="form-group"><label>毛色</label><input type="text" id="f_color" placeholder="例：キジ白"></div>
-          <div class="form-group"><label>性別</label><select id="f_gender"><option value="female">♀ 女の子</option><option value="male">♂ 男の子</option></select></div>
-          <div class="form-group"><label>推定年齢（数字のみ入力）</label>
+          <div class="form-group"><label>性別</label>
+            <select id="f_gender"><option value="female">♀ 女の子</option><option value="male">♂ 男の子</option></select>
+          </div>
+          <div class="form-group">
+            <label>誕生日（入力で年齢自動計算）</label>
+            <input type="date" id="f_birthday">
+          </div>
+          <div class="form-group">
+            <label>年齢（誕生日未入力の場合）</label>
             <div style="display:flex;gap:6px;align-items:center;">
               <input type="number" id="f_age_num" placeholder="例：２" min="0" max="30" step="1" style="width:80px;flex-shrink:0;" inputmode="numeric">
-              <select id="f_age_unit" style="flex:1;">
-                <option value="ヶ月">ヶ月</option>
-                <option value="歳" selected>歳</option>
-              </select>
+              <select id="f_age_unit" style="flex:1;"><option value="ヶ月">ヶ月</option><option value="歳" selected>歳</option></select>
             </div>
           </div>
-          <div class="form-group"><label>年齢区分</label><select id="f_ageGroup"><option value="kitten">仔猫（〜１歳未満）</option><option value="adult">成猫（１歳以上）</option></select></div>
-          <div class="form-group"><label>体重（数字のみ入力）</label>
+          <div class="form-group"><label>年齢区分</label>
+            <select id="f_ageGroup"><option value="kitten">仔猫（〜１歳未満）</option><option value="adult">成猫（１歳以上）</option></select>
+          </div>
+          <div class="form-group">
+            <label>体重（数字のみ）</label>
             <div style="display:flex;gap:6px;align-items:center;">
               <input type="number" id="f_weight_num" placeholder="例：３．２" min="0" max="20" step="0.1" style="flex:1;" inputmode="decimal">
               <span style="font-size:13px;color:var(--text-mid);white-space:nowrap;">kg</span>
             </div>
           </div>
-          <div class="form-group"><label>募集ステータス</label><select id="f_status"><option value="available">募集中</option><option value="pending">応募検討中</option><option value="adopted">譲渡済み</option></select></div>
+          <div class="form-group"><label>募集ステータス</label>
+            <select id="f_status">
+              <option value="available">募集中</option>
+              <option value="trial">トライアル中</option>
+              <option value="pending">応募検討中</option>
+              <option value="adopted">譲渡済み</option>
+            </select>
+          </div>
           <div class="form-group"><label>保護エリア</label><input type="text" id="f_area" placeholder="例：仙台市保護"></div>
+          <div class="form-group full">
+            <label>🔒 担当メンバー（非公開）</label>
+            <select id="f_memberId"><option value="">（未設定）</option></select>
+          </div>
           <!-- 写真 -->
           <div class="form-group full">
             <label>写真（ローカルファイル または URL）</label>
@@ -1369,14 +1785,31 @@ footer p{font-size:10px;color:rgba(255,255,255,.38);}
           <div class="form-group full"><label>その他タグ（カンマ区切り）</label><input type="text" id="f_tags" placeholder="例：室内向き,多頭NG,子どもOK"></div>
           <div class="form-group full"><label>プロフィール・コメント</label><textarea id="f_comment" placeholder="この子の魅力や特徴を書いてください…"></textarea></div>
           <div class="form-group full"><label>健康状態・備考</label><input type="text" id="f_health" placeholder="例：良好。定期的なブラッシング必要"></div>
+          <!-- 医療 -->
           <div class="form-group full">
             <label>医療・処置状況</label>
-            <div class="checkbox-row" style="margin-top:5px;">
+            <div class="checkbox-row" style="margin-top:5px;flex-wrap:wrap;gap:10px;">
               <label class="checkbox-label"><input type="checkbox" id="f_v_triple">三種混合済</label>
-              <label class="checkbox-label"><input type="checkbox" id="f_v_rabies">狂犬病済</label>
+              <input type="date" id="f_v_triple_date" style="font-size:11px;padding:4px 6px;border:1px solid var(--sand);border-radius:6px;background:var(--cream);">
+              <label class="checkbox-label" style="margin-left:8px;"><input type="checkbox" id="f_v_rabies">狂犬病済</label>
               <label class="checkbox-label"><input type="checkbox" id="f_v_leukemia">白血病済</label>
+              <input type="date" id="f_v_leukemia_date" style="font-size:11px;padding:4px 6px;border:1px solid var(--sand);border-radius:6px;background:var(--cream);">
               <label class="checkbox-label"><input type="checkbox" id="f_neutered">不妊手術済</label>
+              <label class="checkbox-label"><input type="checkbox" id="f_flea">ノミ・ダニ駆除済</label>
               <label class="checkbox-label"><input type="checkbox" id="f_microchip">MC登録済</label>
+            </div>
+          </div>
+          <!-- トライアル情報（非公開） -->
+          <div class="form-group full">
+            <label style="color:var(--terracotta);font-weight:500;">🔒 トライアル先情報（非公開）</label>
+            <div class="form-grid" style="margin-top:6px;">
+              <div class="form-group"><label>里親予定者 氏名</label><input type="text" id="f_trial_name" placeholder="例：相澤 麻実"></div>
+              <div class="form-group"><label>電話番号</label><input type="text" id="f_trial_tel" placeholder="例：080-0000-0000"></div>
+              <div class="form-group"><label>郵便番号</label><input type="text" id="f_trial_zip" placeholder="例：〒981-0922"></div>
+              <div class="form-group"><label>メールアドレス</label><input type="text" id="f_trial_email" placeholder="例：example@gmail.com"></div>
+              <div class="form-group full"><label>住所</label><input type="text" id="f_trial_address" placeholder="例：宮城県仙台市青葉区鷺ケ森２−２５−１８"></div>
+              <div class="form-group"><label>トライアル開始日</label><input type="date" id="f_trial_start"></div>
+              <div class="form-group"><label>トライアル終了予定日</label><input type="date" id="f_trial_end"></div>
             </div>
           </div>
         </div>
@@ -1414,6 +1847,30 @@ footer p{font-size:10px;color:rgba(255,255,255,.38);}
           <button class="form-btn primary" onclick="saveEvent()">💾 保存する</button>
         </div>
       </div>
+
+      <!-- メンバーリスト -->
+      <div class="tab-content" id="tab-members">
+        <div class="notice">担当メンバーを登録します。猫の情報と紐づけることができます（非公開）。</div>
+        <div class="admin-cat-list" id="adminMemberList"></div>
+        <div class="cat-count" id="memberCount"></div>
+      </div>
+
+      <!-- メンバーフォーム -->
+      <div class="tab-content" id="tab-memberform">
+        <div id="memberFormTitle" style="font-size:14px;font-weight:500;color:var(--brown);margin-bottom:12px;">新しいメンバーを登録</div>
+        <div class="form-grid">
+          <div class="form-group"><label>名前</label><input type="text" id="m_name" placeholder="例：佐藤 花子"></div>
+          <div class="form-group"><label>電話番号</label><input type="text" id="m_tel" placeholder="例：090-0000-0000"></div>
+          <div class="form-group"><label>郵便番号</label><input type="text" id="m_zip" placeholder="例：〒980-0000"></div>
+          <div class="form-group"><label>メールアドレス</label><input type="text" id="m_email" placeholder="例：example@gmail.com"></div>
+          <div class="form-group full"><label>住所</label><input type="text" id="m_address" placeholder="例：宮城県仙台市○○区○○"></div>
+        </div>
+        <div class="form-actions">
+          <button class="form-btn secondary" onclick="cancelMemberEdit()">キャンセル</button>
+          <button class="form-btn primary" onclick="saveMember()">💾 保存する</button>
+        </div>
+      </div>
+
     </div>
   </div>
 </div>
