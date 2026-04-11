@@ -1068,11 +1068,6 @@ async function _renderFormalWord(id, orgMember) {
   a.click();
   showLoading(false);
   showToast("📝 Wordファイルをダウンロードしました");
-} catch(e) {
-  showLoading(false);
-  showToast("Word生成に失敗しました: " + e.message, "error");
-  console.error("Word生成エラー:", e);
-}
 }
 
 // ── 団体側メンバーをセレクトで選択（住所・電話のみ使用） ──
