@@ -35,6 +35,8 @@
   "keywords": "保護猫,里親募集,譲渡会,仙台市,TNR,地域猫"
 }
 </script>
+<!-- docx.js（Word出力用） -->
+<script src="https://unpkg.com/docx@8.5.0/build/index.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@300;400;500;700&family=Shippori+Mincho:wght@400;600&display=swap" rel="stylesheet">
 
@@ -231,8 +233,15 @@ function showToast(msg, type="success", duration=2800) {
   if (duration > 0) setTimeout(() => t.classList.remove("show"), duration);
 }
 
-function showLoading(show) {
-  document.getElementById("loadingOverlay").style.display = show ? "flex" : "none";
+function showLoading(show, msg) {
+  const overlay = document.getElementById("loadingOverlay");
+  const msgEl   = document.getElementById("loadingMsg");
+  if (show) {
+    if (msgEl) msgEl.textContent = msg || "読み込み中...";
+    overlay.style.display = "flex";
+  } else {
+    overlay.style.display = "none";
+  }
 }
 
 // ─── Public: Cat Grid ────────────────────────────────────
@@ -476,7 +485,7 @@ window.deleteMember = async id => {
   const m = members.find(x => x.id === id);
   if (!m || !confirm(`「${m.name}」を削除しますか？`)) return;
   try {
-    showLoading(true);
+    showLoading(true, "メンバーを削除中...");
     await deleteMemberFromDb(id);
     members = members.filter(x => x.id !== id);
     renderAdminMembers();
@@ -510,7 +519,7 @@ window.saveMember = async () => {
     email:   document.getElementById("m_email").value.trim(),
   };
   try {
-    showLoading(true);
+    showLoading(true, "メンバーを保存中...");
     await saveMemberToDb(id, data);
     if (editingMemberId) {
       const idx = members.findIndex(x => x.id === editingMemberId);
@@ -531,23 +540,33 @@ function formatDateJP(dateStr) {
   return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日`;
 }
 
-// ── 団体側メンバーをセレクトで選択（住所・電話のみ使用） ──
-function selectOrgMember() {
-  if (!members.length) {
-    alert("メンバーが登録されていません。\n先にメンバー管理タブからメンバーを登録してください。");
-    return null;
+// ── 出力形式選択 ──────────────────────────────────────────
+let _outputCallback = null; // { type:'trial'|'formal', catId, orgMember }
+
+window.closeOutputFormat = e => {
+  if (e.target === document.getElementById("outputFormatOverlay")) closeOutputFormatDirect();
+};
+window.closeOutputFormatDirect = () => {
+  document.getElementById("outputFormatOverlay").classList.remove("open");
+  _outputCallback = null;
+};
+window.doOutput = fmt => {
+  document.getElementById("outputFormatOverlay").classList.remove("open");
+  if (!_outputCallback) return;
+  const { type, catId, orgMember } = _outputCallback;
+  _outputCallback = null;
+  if (fmt === "pdf") {
+    type === "trial" ? _renderTrialPDF(catId, orgMember) : _renderFormalPDF(catId, orgMember);
+  } else {
+    type === "trial" ? _renderTrialWord(catId, orgMember) : _renderFormalWord(catId, orgMember);
   }
-  // メンバーが1名なら自動選択
-  if (members.length === 1) return members[0];
-  const options = members.map((m, i) => `${i+1}. ${m.name}（${m.tel||"電話未登録"}）`).join("\n");
-  const input = prompt(`【譲渡人（団体側）】として使用するメンバーを番号で選択してください：\n\n${options}`);
-  if (!input) return null;
-  const idx = parseInt(input.trim()) - 1;
-  if (isNaN(idx) || idx < 0 || idx >= members.length) {
-    alert("正しい番号を入力してください。");
-    return null;
-  }
-  return members[idx];
+};
+
+function openOutputFormatDialog(type, catId, orgMember) {
+  const titles = { trial:"トライアル契約書", formal:"正式譲渡契約書" };
+  document.getElementById("outputFormatTitle").textContent = `${titles[type]} — 出力形式を選択`;
+  _outputCallback = { type, catId, orgMember };
+  document.getElementById("outputFormatOverlay").classList.add("open");
 }
 
 window.printTrialContract = id => {
@@ -555,6 +574,21 @@ window.printTrialContract = id => {
   if (!cat) return;
   const orgMember = selectOrgMember();
   if (!orgMember) return;
+  openOutputFormatDialog("trial", id, orgMember);
+};
+
+window.printFormalContract = id => {
+  const cat = cats.find(c => c.id === id);
+  if (!cat) return;
+  const orgMember = selectOrgMember();
+  if (!orgMember) return;
+  openOutputFormatDialog("formal", id, orgMember);
+};
+
+// ── トライアル契約書 PDF ──────────────────────────────────
+function _renderTrialPDF(id, orgMember) {
+  const cat = cats.find(c => c.id === id);
+  if (!cat) return;
   const tr    = cat.trial||{};
   const today = formatDateJP(new Date().toISOString().slice(0,10));
   const medInfo = [
@@ -565,17 +599,13 @@ window.printTrialContract = id => {
   ].join("\n");
   const trialStart = formatDateJP(tr.startDate);
   const trialEnd   = tr.endDate ? formatDateJP(tr.endDate) : "　　　　年　　月　　日";
-  // 団体側：住所・電話のみ（氏名は自署）
-  const orgZipAddr = `${orgMember.zip||""} ${orgMember.address||""}`.trim();
   const orgTel     = orgMember.tel||"";
-
-  const html = `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8">
-<title>トライアル契約書</title>
+  const html = `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>トライアル契約書</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box;}
   html,body{width:210mm;height:297mm;background:white;}
   body{font-family:'MS Mincho','游明朝',serif;font-size:9.5pt;line-height:1.55;}
-  .page{width:210mm;height:297mm;padding:12mm 15mm 10mm;overflow:hidden;}
+  .page{width:210mm;height:297mm;padding:12mm 15mm 4mm;overflow:hidden;}
   h1{text-align:center;font-size:13.5pt;margin-bottom:6pt;letter-spacing:.2em;}
   .date{text-align:right;margin-bottom:4pt;font-size:9pt;}
   .sec-lbl{font-weight:bold;margin-bottom:2pt;font-size:9pt;}
@@ -593,16 +623,12 @@ window.printTrialContract = id => {
   .sign-row{display:flex;gap:8pt;margin-bottom:3pt;align-items:flex-end;}
   .sign-lbl{width:2.5em;font-size:9pt;flex-shrink:0;}
   .sign-line{flex:1;border-bottom:1px solid #000;min-height:14pt;}
+  .stamp{display:inline-flex;align-items:center;justify-content:center;width:18pt;height:18pt;border:1px solid #000;border-radius:50%;margin-left:4pt;flex-shrink:0;font-size:7.5pt;font-family:'MS Mincho','游明朝',serif;}
   .sign-divider{margin:4pt 0 3pt;border-top:1px dashed #bbb;}
   .fee-block{text-align:center;margin-top:5pt;font-size:8.5pt;line-height:1.6;border-top:1px solid #ccc;padding-top:4pt;}
   .red{color:red;}
-  @media print{
-    html,body{margin:0;padding:0;}
-    .page{padding:12mm 15mm 10mm;}
-    @page{size:A4 portrait;margin:0;}
-  }
-</style></head><body>
-<div class="page">
+  @media print{html,body{margin:0;padding:0;}.page{padding:12mm 15mm 4mm;}@page{size:A4 portrait;margin:0;}}
+</style></head><body><div class="page">
   <h1>トライアル契約書</h1>
   <div class="date">${today}</div>
   <div class="sec-lbl">【譲渡予定動物】</div>
@@ -629,10 +655,10 @@ window.printTrialContract = id => {
   <div class="cage-note">尚、解体される際は上段・下段のみの解体でお願い致します。前後左右の連結は外さないようご注意下さい。</div>
   <div class="sign-block">
     <div class="sign-row"><div class="sign-lbl">住所</div><div class="sign-line">${tr.zip||""} ${tr.address||""}</div></div>
-    <div class="sign-row"><div class="sign-lbl">氏名</div><div class="sign-line"></div></div>
+    <div class="sign-row"><div class="sign-lbl">氏名</div><div class="sign-line"></div><span class="stamp">印</span></div>
     <div class="sign-row"><div class="sign-lbl">電話</div><div class="sign-line">${tr.tel||""}</div></div>
     <div class="sign-divider"></div>
-    <div class="sign-row"><div class="sign-lbl">氏名</div><div class="sign-line">愛すべき野良猫の会　代表</div></div>
+    <div class="sign-row"><div class="sign-lbl">氏名</div><div class="sign-line">愛すべき野良猫の会　代表</div><span class="stamp">印</span></div>
     <div class="sign-row"><div class="sign-lbl">電話</div><div class="sign-line">${orgTel}</div></div>
   </div>
   <div class="fee-block">
@@ -641,19 +667,16 @@ window.printTrialContract = id => {
     去勢済20,000円・避妊済25,000円・未不妊18,000円の<br>
     医療費協力金のご協力をお願いしております。
   </div>
-</div>
-</body></html>`;
+</div></body></html>`;
   const w = window.open("","_blank");
-  w.document.write(html);
-  w.document.close();
+  w.document.write(html); w.document.close();
   setTimeout(()=>w.print(), 600);
-};
+}
 
-window.printFormalContract = id => {
+// ── 正式譲渡契約書 PDF ────────────────────────────────────
+function _renderFormalPDF(id, orgMember) {
   const cat = cats.find(c => c.id === id);
   if (!cat) return;
-  const orgMember = selectOrgMember();
-  if (!orgMember) return;
   const tr    = cat.trial||{};
   const today = formatDateJP(new Date().toISOString().slice(0,10));
   const fee   = calcMedicalFee(cat).toLocaleString();
@@ -666,17 +689,14 @@ window.printFormalContract = id => {
   const photoTag = cat.img
     ? `<img src="${cat.img}" style="width:68pt;height:68pt;object-fit:cover;border:1px solid #ccc;flex-shrink:0;">`
     : `<div style="width:68pt;height:68pt;border:1px solid #ccc;display:flex;align-items:center;justify-content:center;font-size:8pt;flex-shrink:0;color:#999;">写真</div>`;
-  // 団体側：住所・電話のみ（氏名は自署）
   const orgZipAddr = `${orgMember.zip||""} ${orgMember.address||""}`.trim();
   const orgTel     = orgMember.tel||"";
-
-  const html = `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8">
-<title>正式譲渡契約書</title>
+  const html = `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>正式譲渡契約書</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box;}
   html,body{width:210mm;height:297mm;background:white;}
   body{font-family:'MS Mincho','游明朝',serif;font-size:9.5pt;line-height:1.5;}
-  .page{width:210mm;height:297mm;padding:11mm 15mm 9mm;overflow:hidden;}
+  .page{width:210mm;height:297mm;padding:11mm 15mm 4mm;overflow:hidden;}
   h1{text-align:center;font-size:13.5pt;margin-bottom:5pt;letter-spacing:.2em;}
   .date{text-align:right;margin-bottom:4pt;font-size:9pt;}
   .sec-lbl{font-weight:bold;margin-bottom:2pt;font-size:9pt;}
@@ -695,14 +715,9 @@ window.printFormalContract = id => {
   .sign-row{display:flex;gap:4pt;margin-bottom:2pt;align-items:flex-end;}
   .sign-lbl{width:3em;font-size:8.5pt;flex-shrink:0;}
   .sign-val{flex:1;border-bottom:1px solid #000;min-height:13pt;font-size:8.5pt;padding-bottom:1pt;}
-  .stamp{display:inline-block;width:20pt;height:20pt;border:1px solid #000;border-radius:50%;margin-left:4pt;flex-shrink:0;}
-  @media print{
-    html,body{margin:0;padding:0;}
-    .page{padding:11mm 15mm 9mm;}
-    @page{size:A4 portrait;margin:0;}
-  }
-</style></head><body>
-<div class="page">
+  .stamp{display:inline-flex;align-items:center;justify-content:center;width:20pt;height:20pt;border:1px solid #000;border-radius:50%;margin-left:4pt;flex-shrink:0;font-size:8pt;font-family:'MS Mincho','游明朝',serif;}
+  @media print{html,body{margin:0;padding:0;}.page{padding:11mm 15mm 4mm;}@page{size:A4 portrait;margin:0;}}
+</style></head><body><div class="page">
   <h1>正式譲渡契約書</h1>
   <div class="date">${today}</div>
   <div class="sec-lbl">【譲渡動物】</div>
@@ -711,7 +726,7 @@ window.printFormalContract = id => {
       <tr><td class="lbl">種別</td><td>猫　１頭</td></tr>
       <tr><td class="lbl">月齢</td><td>${cat.age}</td></tr>
       <tr><td class="lbl">体重</td><td>${cat.weight||""}</td></tr>
-      <tr><td class="lbl">誕生日</td><td>${cat.birthday ? formatDateJP(cat.birthday) : ""}</td></tr>
+      <tr><td class="lbl">誕生日</td><td>${cat.birthday?formatDateJP(cat.birthday):""}</td></tr>
       <tr><td class="lbl">毛色</td><td>${cat.color||""}</td></tr>
       <tr><td class="lbl">性別</td><td>${cat.gender==="male"?"♂":"♀"}</td></tr>
       <tr><td class="lbl">仮名</td><td>${cat.name}　[正式名]　${cat.formalName||"　　　　　"}</td></tr>
@@ -745,25 +760,300 @@ window.printFormalContract = id => {
       <div class="sign-block">
         <div class="sign-block-title">【譲受人】</div>
         <div class="sign-row"><div class="sign-lbl">住所</div><div class="sign-val">${tr.zip||""} ${tr.address||""}</div></div>
-        <div class="sign-row"><div class="sign-lbl">氏名</div><div class="sign-val"></div><span class="stamp"></span></div>
+        <div class="sign-row"><div class="sign-lbl">氏名</div><div class="sign-val"></div><span class="stamp">印</span></div>
         <div class="sign-row"><div class="sign-lbl">電話</div><div class="sign-val">${tr.tel||""}</div></div>
       </div>
       <div class="sign-block">
         <div class="sign-block-title">【譲渡人】</div>
         <div class="sign-row"><div class="sign-lbl">住所</div><div class="sign-val">${orgZipAddr}</div></div>
-        <div class="sign-row"><div class="sign-lbl">氏名</div><div class="sign-val">愛すべき野良猫の会　代表</div><span class="stamp"></span></div>
+        <div class="sign-row"><div class="sign-lbl">氏名</div><div class="sign-val">愛すべき野良猫の会　代表</div><span class="stamp">印</span></div>
         <div class="sign-row"><div class="sign-lbl">電話</div><div class="sign-val">${orgTel}</div></div>
       </div>
     </div>
   </div>
-</div>
-</body></html>`;
+</div></body></html>`;
   const w = window.open("","_blank");
-  w.document.write(html);
-  w.document.close();
+  w.document.write(html); w.document.close();
   setTimeout(()=>w.print(), 600);
-};
+}
 
+// ── トライアル契約書 Word ─────────────────────────────────
+async function _renderTrialWord(id, orgMember) {
+  const cat = cats.find(c => c.id === id);
+  if (!cat) return;
+  showLoading(true, "📝 Wordファイルを生成中...");
+  const tr    = cat.trial||{};
+  const today = formatDateJP(new Date().toISOString().slice(0,10));
+  const trialStart = formatDateJP(tr.startDate);
+  const trialEnd   = tr.endDate ? formatDateJP(tr.endDate) : "　　　　年　　月　　日";
+  const orgTel = orgMember.tel||"";
+  const medLines = [
+    `エイズ・白血病：陰性`,
+    `３種混合ワクチン接種：${cat.vaccine?.triple?"済":"未"}${cat.vaccine?.tripleDate?" (最終日"+formatDateJP(cat.vaccine.tripleDate)+")":""}`,
+    `ノミ・ダニ駆除・駆虫：${cat.flea?"済":"未"}`,
+    `不妊手術：${cat.neutered?"済":"未"}`
+  ];
+  const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
+          AlignmentType, BorderStyle, WidthType, VerticalAlign } = docx;
+
+  const noBorder = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
+  const noBorders = { top:noBorder, bottom:noBorder, left:noBorder, right:noBorder };
+  const underBorder = { style: BorderStyle.SINGLE, size: 6, color: "000000" };
+
+  const infoRows = [
+    ["種別","猫","仮名",cat.name],
+    ["月齢",cat.age,"性別",cat.gender==="male"?"♂":"♀"],
+  ];
+
+  const makeInfoTable = rows => new Table({
+    width:{ size:9026, type:WidthType.DXA },
+    columnWidths:[1200,3100,1200,3526],
+    borders:{ top:noBorder, bottom:noBorder, left:noBorder, right:noBorder, insideH:noBorder, insideV:noBorder },
+    rows: rows.map(r => new TableRow({ children: r.map((cell,i) => new TableCell({
+      borders: noBorders,
+      width:{ size:[1200,3100,1200,3526][i], type:WidthType.DXA },
+      children:[new Paragraph({ children:[new TextRun({ text:cell, font:"MS Mincho", size:19, bold:i%2===0 })] })]
+    }))}))
+  });
+
+  const signRow = (label, value) => new Table({
+    width:{ size:9026, type:WidthType.DXA }, columnWidths:[700,7826,500],
+    borders:{ top:noBorder, bottom:noBorder, left:noBorder, right:noBorder, insideH:noBorder, insideV:noBorder },
+    rows:[new TableRow({ children:[
+      new TableCell({ borders:noBorders, width:{size:700,type:WidthType.DXA},
+        children:[new Paragraph({ children:[new TextRun({text:label,font:"MS Mincho",size:19})] })] }),
+      new TableCell({ borders:{ top:noBorder, left:noBorder, right:noBorder, bottom:underBorder },
+        width:{size:7826,type:WidthType.DXA},
+        children:[new Paragraph({ children:[new TextRun({text:value,font:"MS Mincho",size:19})] })] }),
+      new TableCell({ borders:noBorders, width:{size:500,type:WidthType.DXA},
+        children:[new Paragraph({ children:[new TextRun({text:"　",font:"MS Mincho",size:19})] })] }),
+    ]})]
+  });
+
+  const p = (text, opts={}) => new Paragraph({
+    alignment: opts.center ? AlignmentType.CENTER : AlignmentType.LEFT,
+    spacing:{ before: opts.before||0, after: opts.after||60 },
+    children:[new TextRun({ text, font:"MS Mincho", size: opts.size||19, bold:!!opts.bold, color:opts.red?"FF0000":undefined })]
+  });
+  const space = () => new Paragraph({ children:[new TextRun("")], spacing:{before:0,after:60} });
+
+  const items = [
+    "トライアルは、譲渡予定動物にとって飼育環境が適正であるかを、保護主が確認する為に行うものである。",
+    "保護主から里親予定者に対し飼育状況の改善要求がなされた場合には、譲渡予定動物の飼育にふさわしい環境を整える。",
+    "里親予定者は保護主からの譲渡予定動物の写真・動画、面会請求に応じなければならない。",
+    "里親予定者は、いかなる理由においても保護主の譲渡予定動物の返還要求に応じなければならない。",
+    "里親予定者は、譲渡予定動物を放し飼いにする事なく完全室内飼いで管理する。",
+    "万が一、譲渡予定動物を脱走させてしまった場合、里親予定者は速やかに保護主に連絡し、責任を持って探し出さなければならない。捜索に係る費用は里親予定者の負担とする。",
+    "里親予定者は、譲渡予定動物を飼育できない状況になった場合、速やかに保護主に報告し譲渡予定動物を返還する。",
+    "譲渡予定動物の給餌、給水および衛生管理に係る費用は、里親予定者の費用とする。",
+    "譲渡予定動物に医療行為を受けさせる場合、里親予定者は速やかに保護主に相談する。譲渡予定動物の病気にかかる診断、治療に係る費用については保護主の負担とする。ただし、里親予定者の過失による怪我や事故に関しては里親予定者の負担とする。",
+  ];
+
+  const doc = new Document({ sections:[{ properties:{ page:{
+    size:{ width:11906, height:16838 },
+    margin:{ top:800, right:1000, bottom:500, left:1000 }
+  }}, children:[
+    p("トライアル契約書",{center:true,size:26,bold:true,before:0,after:120}),
+    new Paragraph({ alignment:AlignmentType.RIGHT, spacing:{before:0,after:80},
+      children:[new TextRun({text:today,font:"MS Mincho",size:18})] }),
+    p("【譲渡予定動物】",{bold:true,size:18,after:60}),
+    makeInfoTable(infoRows),
+    new Table({ width:{size:9026,type:WidthType.DXA}, columnWidths:[1200,7826],
+      borders:{ top:noBorder,bottom:noBorder,left:noBorder,right:noBorder,insideH:noBorder,insideV:noBorder },
+      rows:[new TableRow({children:[
+        new TableCell({borders:noBorders,width:{size:1200,type:WidthType.DXA},children:[p("医療",{bold:true,size:18,after:0})]}),
+        new TableCell({borders:noBorders,width:{size:7826,type:WidthType.DXA},children:medLines.map(l=>p(l,{size:18,after:20}))})
+      ]})]
+    }),
+    space(),
+    p(`トライアル期間　${trialStart}　〜　${trialEnd}`,{size:19,after:80}),
+    p("トライアル期間中の約束事項",{center:true,bold:true,size:18,after:80}),
+    ...items.map((item,i) => new Paragraph({
+      spacing:{before:0,after:40},
+      numbering:undefined,
+      children:[new TextRun({text:`${i+1}．${item}`,font:"MS Mincho",size:17})]
+    })),
+    space(),
+    p("上記の内容を理解、納得し、トライアルを開始致します。",{center:true,size:17,after:30}),
+    p("本契約書は、仮契約となる為、トライアル期間のみ有効とさせて頂きます。",{center:true,size:17,after:30}),
+    p("※貸し出しケージ・トイレはトライアル終了時に返却となります。",{center:true,size:16,after:20}),
+    p("尚、解体される際は上段・下段のみの解体でお願い致します。前後左右の連結は外さないようご注意下さい。",{center:true,size:16,after:80}),
+    signRow("住所",`${tr.zip||""} ${tr.address||""}`),
+    space(),
+    signRow("氏名",""),
+    signRow("電話",tr.tel||""),
+    new Paragraph({children:[new TextRun("─────────────────────────────────────────",{font:"MS Mincho",size:16})],spacing:{before:60,after:60}}),
+    signRow("氏名","愛すべき野良猫の会　代表"),
+    signRow("電話",orgTel),
+    space(),
+    new Paragraph({ alignment:AlignmentType.CENTER, spacing:{before:60,after:0}, border:{ top:{style:BorderStyle.SINGLE,size:4,color:"999999"}},
+      children:[new TextRun({text:"保護猫たちには必要な医療を施した上で譲渡しております。",font:"MS Mincho",size:16})] }),
+    p("正式譲渡の際には医療費の一部負担として",{center:true,size:16,after:20}),
+    p("去勢済20,000円・避妊済25,000円・未不妊18,000円の",{center:true,size:16,after:20}),
+    p("医療費協力金のご協力をお願いしております。",{center:true,size:16,after:0}),
+  ]}]});
+
+  const buf = await Packer.toBuffer(doc);
+  const blob = new Blob([buf], { type:"application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `トライアル契約書_${cat.name}_${today}.docx`;
+  a.click();
+  showLoading(false);
+  showToast("📝 Wordファイルをダウンロードしました");
+}
+
+// ── 正式譲渡契約書 Word ───────────────────────────────────
+async function _renderFormalWord(id, orgMember) {
+  const cat = cats.find(c => c.id === id);
+  if (!cat) return;
+  showLoading(true, "📝 Wordファイルを生成中...");
+  const tr    = cat.trial||{};
+  const today = formatDateJP(new Date().toISOString().slice(0,10));
+  const fee   = calcMedicalFee(cat).toLocaleString();
+  const orgZipAddr = `${orgMember.zip||""} ${orgMember.address||""}`.trim();
+  const orgTel     = orgMember.tel||"";
+  const medLines = [
+    `エイズ・白血病：陰性${cat.vaccine?.leukemiaDate?" (最終日"+formatDateJP(cat.vaccine.leukemiaDate)+")":""}`,
+    `３種混合ワクチン接種：${cat.vaccine?.triple?"１回":"未"}${cat.vaccine?.tripleDate?" (最終日"+formatDateJP(cat.vaccine.tripleDate)+")":""}`,
+    `ノミ・ダニ駆除・駆虫${cat.flea?"済":"未"}`,
+    `${cat.neutered?(cat.gender==="male"?"去勢済":"避妊済"):"未不妊"}`
+  ];
+
+  const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
+          AlignmentType, BorderStyle, WidthType } = docx;
+
+  const noBorder = { style:BorderStyle.NONE, size:0, color:"FFFFFF" };
+  const noBorders = { top:noBorder, bottom:noBorder, left:noBorder, right:noBorder };
+  const underBorder = { style:BorderStyle.SINGLE, size:6, color:"000000" };
+
+  const p = (text, opts={}) => new Paragraph({
+    alignment: opts.center ? AlignmentType.CENTER : AlignmentType.LEFT,
+    spacing:{ before:opts.before||0, after:opts.after||50 },
+    children:[new TextRun({ text, font:"MS Mincho", size:opts.size||18, bold:!!opts.bold })]
+  });
+  const space = (n=50) => new Paragraph({ children:[new TextRun("")], spacing:{before:0,after:n} });
+
+  const signRow = (label, value) => new Table({
+    width:{ size:9026, type:WidthType.DXA }, columnWidths:[700,7826,500],
+    borders:{ top:noBorder,bottom:noBorder,left:noBorder,right:noBorder,insideH:noBorder,insideV:noBorder },
+    rows:[new TableRow({children:[
+      new TableCell({ borders:noBorders, width:{size:700,type:WidthType.DXA},
+        children:[new Paragraph({children:[new TextRun({text:label,font:"MS Mincho",size:18,bold:true})]})] }),
+      new TableCell({ borders:{top:noBorder,left:noBorder,right:noBorder,bottom:underBorder},
+        width:{size:7826,type:WidthType.DXA},
+        children:[new Paragraph({children:[new TextRun({text:value,font:"MS Mincho",size:18})]})] }),
+      new TableCell({ borders:noBorders, width:{size:500,type:WidthType.DXA},
+        children:[new Paragraph({children:[new TextRun({text:"印",font:"MS Mincho",size:16})]})] }),
+    ]})]
+  });
+
+  const infoRows = [
+    new TableRow({children:[
+      new TableCell({borders:noBorders,width:{size:1200,type:WidthType.DXA},children:[p("種別",{bold:true,size:17,after:0})]}),
+      new TableCell({borders:noBorders,width:{size:3000,type:WidthType.DXA},children:[p("猫　１頭",{size:17,after:0})]}),
+    ]}),
+    new TableRow({children:[
+      new TableCell({borders:noBorders,width:{size:1200,type:WidthType.DXA},children:[p("月齢",{bold:true,size:17,after:0})]}),
+      new TableCell({borders:noBorders,width:{size:3000,type:WidthType.DXA},children:[p(cat.age,{size:17,after:0})]}),
+    ]}),
+    new TableRow({children:[
+      new TableCell({borders:noBorders,width:{size:1200,type:WidthType.DXA},children:[p("体重",{bold:true,size:17,after:0})]}),
+      new TableCell({borders:noBorders,width:{size:3000,type:WidthType.DXA},children:[p(cat.weight||"",{size:17,after:0})]}),
+    ]}),
+    new TableRow({children:[
+      new TableCell({borders:noBorders,width:{size:1200,type:WidthType.DXA},children:[p("誕生日",{bold:true,size:17,after:0})]}),
+      new TableCell({borders:noBorders,width:{size:3000,type:WidthType.DXA},children:[p(cat.birthday?formatDateJP(cat.birthday):"",{size:17,after:0})]}),
+    ]}),
+    new TableRow({children:[
+      new TableCell({borders:noBorders,width:{size:1200,type:WidthType.DXA},children:[p("毛色",{bold:true,size:17,after:0})]}),
+      new TableCell({borders:noBorders,width:{size:3000,type:WidthType.DXA},children:[p(cat.color||"",{size:17,after:0})]}),
+    ]}),
+    new TableRow({children:[
+      new TableCell({borders:noBorders,width:{size:1200,type:WidthType.DXA},children:[p("性別",{bold:true,size:17,after:0})]}),
+      new TableCell({borders:noBorders,width:{size:3000,type:WidthType.DXA},children:[p(cat.gender==="male"?"♂":"♀",{size:17,after:0})]}),
+    ]}),
+    new TableRow({children:[
+      new TableCell({borders:noBorders,width:{size:1200,type:WidthType.DXA},children:[p("仮名",{bold:true,size:17,after:0})]}),
+      new TableCell({borders:noBorders,width:{size:3000,type:WidthType.DXA},children:[p(`${cat.name}　[正式名]　${cat.formalName||"　　　　　"}`,{size:17,after:0})]}),
+    ]}),
+    new TableRow({children:[
+      new TableCell({borders:noBorders,width:{size:1200,type:WidthType.DXA},children:[p("医療",{bold:true,size:17,after:0})]}),
+      new TableCell({borders:noBorders,width:{size:3000,type:WidthType.DXA},children:medLines.map(l=>p(l,{size:17,after:20}))}),
+    ]}),
+  ];
+
+  const pledgeItems = [
+    "譲渡された猫を共に生きる伴侶・家族として、最後まで責任を持って愛育します。",
+    "事故・感染症・迷子・虐待等を防ぐため、完全室内飼いをします。",
+    "脱走防止に留意し、防止対策を施したうえで、必要に応じてケージ等を利用します。",
+    "脱走した場合は、下記明記人に一報の上、早急な保護に努めます。",
+    "適切な給餌管理・健康管理を行い、事故や病気の場合は速やかに適切な医療を受けさせます。",
+    "譲渡猫に抜爪手術はしません。また虐待や殺傷等本猫を傷つける行為も絶対に行いません。",
+    "感染症予防のために動物病院と相談の上、１年に一度のワクチン接種を受けます。",
+    "本猫の様子を適宜、画像付きでお知らせします。",
+    "本猫を譲渡者の承諾なしに第三者に譲ったり、誓約書表記の住所以外での飼育はしません。",
+    "引越しなどで住所や電話番号が変更する場合、速やかに譲渡人にお知らせします。",
+    "本猫を第三者に譲渡する必要が出てきた場合、速やかに譲渡人に相談の上必ず新しい飼い主の氏名・住所・連絡先を開示します。",
+    "譲渡後に発見された病気等があっても、自己が責任を持って飼育します。",
+    "万が一、本猫について、譲渡人だけでは判断できない状況、状態が生じた場合、必ず譲渡人に連絡・相談します。",
+  ];
+
+  const doc = new Document({ sections:[{ properties:{ page:{
+    size:{ width:11906, height:16838 },
+    margin:{ top:700, right:1000, bottom:400, left:1000 }
+  }}, children:[
+    p("正式譲渡契約書",{center:true,size:26,bold:true,before:0,after:100}),
+    new Paragraph({ alignment:AlignmentType.RIGHT, spacing:{before:0,after:60},
+      children:[new TextRun({text:today,font:"MS Mincho",size:17})] }),
+    p("【譲渡動物】",{bold:true,size:17,after:50}),
+    new Table({ width:{size:9026,type:WidthType.DXA}, columnWidths:[1200,3000],
+      borders:{top:noBorder,bottom:noBorder,left:noBorder,right:noBorder,insideH:noBorder,insideV:noBorder},
+      rows: infoRows }),
+    space(80),
+    p("私は上記の猫を譲り受けるにあたり、下記事項を誓約致します。",{size:17,after:60}),
+    ...pledgeItems.map((item,i) => new Paragraph({
+      spacing:{before:0,after:30},
+      children:[new TextRun({text:`${i+1}．${item}`,font:"MS Mincho",size:16})]
+    })),
+    space(60),
+    p("トライアル期間を無事終了し、双方問題がないと判断し正式譲渡と致します。また、正式譲渡の後でも、飼育不適切と判断された場合、または譲渡人との信頼関係が継続困難と判断した場合は、譲渡人が引き取る権利を有します。",{size:16,after:30}),
+    p("本誓約書は２通作成し、譲渡人・譲受人双方がそれぞれ１通ずつ本猫が死亡するまで保管します。",{size:16,after:30}),
+    p(`本誓約書を以って、医療費一部ご協力金　金${fee}円　の領収書に代えさせて頂きます。`,{size:16,after:60}),
+    p("【譲受人】",{bold:true,size:17,after:30}),
+    signRow("住所",`${tr.zip||""} ${tr.address||""}`),
+    space(30), signRow("氏名",""), signRow("電話",tr.tel||""),
+    space(60),
+    p("【譲渡人】",{bold:true,size:17,after:30}),
+    signRow("住所",orgZipAddr),
+    space(30), signRow("氏名","愛すべき野良猫の会　代表"), signRow("電話",orgTel),
+  ]}]});
+
+  const buf = await Packer.toBuffer(doc);
+  const blob = new Blob([buf], { type:"application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `正式譲渡契約書_${cat.name}_${today}.docx`;
+  a.click();
+  showLoading(false);
+  showToast("📝 Wordファイルをダウンロードしました");
+}
+  if (!members.length) {
+    alert("メンバーが登録されていません。\n先にメンバー管理タブからメンバーを登録してください。");
+    return null;
+  }
+  // メンバーが1名なら自動選択
+  if (members.length === 1) return members[0];
+  const options = members.map((m, i) => `${i+1}. ${m.name}（${m.tel||"電話未登録"}）`).join("\n");
+  const input = prompt(`【譲渡人（団体側）】として使用するメンバーを番号で選択してください：\n\n${options}`);
+  if (!input) return null;
+  const idx = parseInt(input.trim()) - 1;
+  if (isNaN(idx) || idx < 0 || idx >= members.length) {
+    alert("正しい番号を入力してください。");
+    return null;
+  }
+  return members[idx];
+}
 window.switchTab = (name, btn) => {
   document.querySelectorAll(".admin-tab").forEach(t => t.classList.remove("active"));
   document.querySelectorAll(".tab-content").forEach(t => t.classList.remove("active"));
@@ -781,7 +1071,7 @@ window.doLogin = async () => {
   const pass  = document.getElementById("loginPass").value;
   if (!email || !pass) { showToast("メールアドレスとパスワードを入力してください","error"); return; }
   try {
-    showLoading(true);
+    showLoading(true, "ログイン中...");
     await signInWithEmailAndPassword(auth, email, pass);
     document.getElementById("loginOverlay").classList.remove("open");
     document.getElementById("loginEmail").value = "";
@@ -844,7 +1134,7 @@ window.deleteCat = async id => {
   const cat = cats.find(c => c.id === id);
   if (!cat || !confirm(`「${cat.name}」を削除しますか？元に戻せません。`)) return;
   try {
-    showLoading(true);
+    showLoading(true, "削除中...");
     await deleteCatFromDb(id);
     cats = cats.filter(c => c.id !== id);
     renderAdminCats(); renderGrid();
@@ -935,11 +1225,13 @@ window.saveCat = async () => {
   const name = document.getElementById("f_name").value.trim();
   if (!name) { showToast("名前を入力してください","error"); return; }
   try {
-    showLoading(true);
+    showLoading(true, "保存中...");
     let imgUrl = document.getElementById("f_imgUrl").value.trim();
     // ローカルファイルが選ばれていればCloudinaryへアップロード
     if (_pendingImgFile) {
+      showLoading(true, "📤 写真をCloudinaryにアップロード中...");
       imgUrl = await uploadToCloudinary(_pendingImgFile);
+      showLoading(true, "保存中...");
     }
     const ageNum  = document.getElementById("f_age_num").value.trim();
     const ageUnit = document.getElementById("f_age_unit").value;
@@ -1085,7 +1377,7 @@ window.deleteEvent = async id => {
   const ev = events.find(e => e.id === id);
   if (!ev || !confirm(`「${ev.title}」を削除しますか？`)) return;
   try {
-    showLoading(true);
+    showLoading(true, "削除中...");
     await deleteEventFromDb(id);
     events = events.filter(e => e.id !== id);
     renderAdminEvents(); renderSchedule();
@@ -1159,7 +1451,7 @@ window.saveEvent = async () => {
     catIds:  selectedCatIds
   };
   try {
-    showLoading(true);
+    showLoading(true, "譲渡会を保存中...");
     await saveEventToDb(id, data);
     if (editingEventId) {
       const idx = events.findIndex(e => e.id === editingEventId);
@@ -1205,7 +1497,7 @@ async function loadUpdates() {
     const logs = snap.docs
       .map(d => ({ id: d.id, ...d.data() }))
       .sort((a,b) => b.createdAt.localeCompare(a.createdAt))
-      .slice(0, 10); // 最新10件のみ表示
+      .slice(0, 5); // 最新5件のみ表示
     renderUpdates(logs);
   } catch(e) { /* 読み込み失敗は無視 */ }
 }
@@ -1239,7 +1531,7 @@ function formatDateTime(iso) {
   } catch { return ""; }
 }
 (async () => {
-  showLoading(true);
+  showLoading(true, "データを読み込み中...");
   try {
     await Promise.all([loadCats(), loadEvents(), loadUpdates(), loadMembers()]);
   } catch(e) {
@@ -1560,7 +1852,7 @@ footer p{font-size:10px;color:rgba(255,255,255,.38);}
 <body>
 
 <!-- LOADING -->
-<div id="loadingOverlay"><div class="spinner"></div><div style="font-size:13px;color:var(--text-mid);">読み込み中...</div></div>
+<div id="loadingOverlay"><div class="spinner"></div><div id="loadingMsg" style="font-size:13px;color:var(--text-mid);margin-top:4px;">読み込み中...</div></div>
 
 <!-- HEADER -->
 <header>
@@ -1700,6 +1992,23 @@ footer p{font-size:10px;color:rgba(255,255,255,.38);}
       <div class="event-modal-section-title">📋 参加予定の猫</div>
       <div class="event-cats-grid" id="evModalCats"></div>
       <div id="evModalNote"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 出力形式選択モーダル -->
+<div class="overlay" id="outputFormatOverlay" onclick="closeOutputFormat(event)">
+  <div style="background:white;border-radius:18px;max-width:340px;width:100%;padding:28px 24px;animation:modalIn .3s ease both;text-align:center;">
+    <div style="font-size:18px;font-weight:600;color:var(--brown);font-family:'Shippori Mincho',serif;margin-bottom:6px;" id="outputFormatTitle">出力形式を選択</div>
+    <div style="font-size:12px;color:var(--text-light);margin-bottom:22px;">PDFは印刷・保存向き、Wordは後から編集したい場合に</div>
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <button onclick="doOutput('pdf')" style="background:var(--caramel);color:white;border:none;border-radius:10px;padding:14px;font-family:'Zen Maru Gothic',sans-serif;font-size:14px;cursor:pointer;transition:background .2s;display:flex;align-items:center;justify-content:center;gap:8px;" onmouseover="this.style.background='var(--terracotta)'" onmouseout="this.style.background='var(--caramel)'">
+        <span style="font-size:18px;">📄</span> PDF（印刷・保存向き）
+      </button>
+      <button onclick="doOutput('word')" style="background:#2b579a;color:white;border:none;border-radius:10px;padding:14px;font-family:'Zen Maru Gothic',sans-serif;font-size:14px;cursor:pointer;transition:background .2s;display:flex;align-items:center;justify-content:center;gap:8px;" onmouseover="this.style.background='#1e3f6f'" onmouseout="this.style.background='#2b579a'">
+        <span style="font-size:18px;">📝</span> Word（後から編集可能）
+      </button>
+      <button onclick="closeOutputFormatDirect()" style="background:var(--sand);color:var(--text-mid);border:none;border-radius:10px;padding:10px;font-family:'Zen Maru Gothic',sans-serif;font-size:12px;cursor:pointer;margin-top:2px;">キャンセル</button>
     </div>
   </div>
 </div>
