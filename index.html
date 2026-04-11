@@ -35,8 +35,7 @@
   "keywords": "保護猫,里親募集,譲渡会,仙台市,TNR,地域猫"
 }
 </script>
-<!-- docx.js（Word出力用） -->
-<script src="https://unpkg.com/docx@8.5.0/build/index.js"></script>
+<!-- docx.js（Word出力用）はESモジュールとしてdynamic importで読み込む -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@300;400;500;700&family=Shippori+Mincho:wght@400;600&display=swap" rel="stylesheet">
 
@@ -585,12 +584,28 @@ window.printFormalContract = id => {
   openOutputFormatDialog("formal", id, orgMember);
 };
 
-// ── Word生成用: docxグローバル変数の確認 ──────────────────
-function getDocxLib() {
-  // CDN読み込み時のグローバル変数名は 'docx'
-  if (typeof docx !== 'undefined') return docx;
-  if (typeof window.docx !== 'undefined') return window.docx;
-  return null;
+// ── Word生成用: docxをESモジュールとして動的インポート ────
+let _docxLib = null;
+async function getDocxLib() {
+  if (_docxLib) return _docxLib;
+  try {
+    // ESモジュール版をdynamic importで読み込む
+    _docxLib = await import("https://unpkg.com/docx@8.5.0/build/index.js");
+    return _docxLib;
+  } catch(e) {
+    // UMD版フォールバック（スクリプトタグ読み込み）
+    return new Promise((resolve, reject) => {
+      if (typeof docx !== 'undefined') { _docxLib = docx; resolve(docx); return; }
+      const s = document.createElement('script');
+      s.src = 'https://unpkg.com/docx@8.5.0/build/index.js';
+      s.onload = () => {
+        if (typeof docx !== 'undefined') { _docxLib = docx; resolve(docx); }
+        else reject(new Error('docx未定義'));
+      };
+      s.onerror = () => reject(new Error('スクリプト読み込み失敗'));
+      document.head.appendChild(s);
+    });
+  }
 }
 function _renderTrialPDF(id, orgMember) {
   const cat = cats.find(c => c.id === id);
@@ -788,10 +803,17 @@ async function _renderTrialWord(id, orgMember) {
   const cat = cats.find(c => c.id === id);
   if (!cat) return;
   showLoading(true, "📝 Wordファイルを生成中...");
-  const docxLib = getDocxLib();
+  let docxLib;
+  try {
+    docxLib = await getDocxLib();
+  } catch(e) {
+    showLoading(false);
+    showToast("Word生成ライブラリの読み込みに失敗しました。ネット接続を確認して再試行してください。", "error");
+    return;
+  }
   if (!docxLib) {
     showLoading(false);
-    showToast("Word生成ライブラリが読み込まれていません。ページを再読み込みしてください。", "error");
+    showToast("Word生成ライブラリが取得できませんでした。", "error");
     return;
   }
   const tr    = cat.trial||{};
@@ -920,10 +942,17 @@ async function _renderFormalWord(id, orgMember) {
   const cat = cats.find(c => c.id === id);
   if (!cat) return;
   showLoading(true, "📝 Wordファイルを生成中...");
-  const docxLib = getDocxLib();
+  let docxLib;
+  try {
+    docxLib = await getDocxLib();
+  } catch(e) {
+    showLoading(false);
+    showToast("Word生成ライブラリの読み込みに失敗しました。ネット接続を確認して再試行してください。", "error");
+    return;
+  }
   if (!docxLib) {
     showLoading(false);
-    showToast("Word生成ライブラリが読み込まれていません。ページを再読み込みしてください。", "error");
+    showToast("Word生成ライブラリが取得できませんでした。", "error");
     return;
   }
   const tr    = cat.trial||{};
