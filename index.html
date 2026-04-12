@@ -339,7 +339,7 @@ function renderSchedule() {
           </div>
         </div>
         <div class="event-action">
-          <button class="event-detail-btn" onclick="openEventModal('${ev.id}')">詳しく見る →</button>
+          ${ev.flyer?`<img src="${ev.flyer}" alt="チラシ" style="width:80px;height:80px;object-fit:cover;border-radius:8px;margin-bottom:6px;cursor:pointer;" onclick="openEventModal('${ev.id}')">`:""}          <button class="event-detail-btn" onclick="openEventModal('${ev.id}')">詳しく見る →</button>
         </div>
       </div>`;
     list.appendChild(card);
@@ -393,7 +393,8 @@ window.openEventModal = id => {
     <div class="event-modal-meta-item">📅 ${formatDate(ev.date)}</div>
     <div class="event-modal-meta-item">🕐 ${ev.start||""}〜${ev.end||""}</div>
     <div class="event-modal-meta-item">📍 ${ev.place||""}</div>
-    ${ev.address?`<div class="event-modal-meta-item">🚌 ${ev.address}</div>`:""}`;
+    ${ev.address?`<div class="event-modal-meta-item">🚌 ${ev.address}</div>`:""}
+    ${ev.flyer?`<div style="margin-top:10px;"><img src="${ev.flyer}" alt="チラシ" style="max-width:100%;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,.15);"></div>`:""}`;
   const pCats = (ev.catIds||[]).map(id => cats.find(c => c.id === id)).filter(Boolean);
   document.getElementById("evModalCats").innerHTML = pCats.length
     ? pCats.map(cat=>`
@@ -867,6 +868,70 @@ async function _renderFormalWord(id, orgMember) {
   }
 }
 
+
+// ── 品種→毛色の連動 ──────────────────────────────────────
+const BREED_COLOR_MAP = {
+  "キジトラ": "キジトラ", "サバトラ": "サバトラ", "茶トラ": "茶トラ",
+  "黒猫": "黒", "白猫": "白", "三毛猫": "三毛",
+  "キジ白": "キジ白", "サバ白": "サバ白", "茶白": "茶白",
+  "ハチワレ": "ハチワレ"
+};
+function syncBreedColor() {
+  const breed = document.getElementById("f_breed").value;
+  const colorSel = document.getElementById("f_color");
+  if (BREED_COLOR_MAP[breed]) colorSel.value = BREED_COLOR_MAP[breed];
+}
+
+// ── 郵便番号→住所自動入力（zipcloud API） ─────────────────
+let _zipTimer = null;
+async function autoFillAddress(zip, addressFieldId) {
+  const digits = zip.replace(/[^0-9]/g, "");
+  if (digits.length !== 7) return;
+  clearTimeout(_zipTimer);
+  _zipTimer = setTimeout(async () => {
+    try {
+      const res = await fetch(`https://zipcloud.ibsnet.co.jp/api/search?zipcode=${digits}`);
+      const json = await res.json();
+      if (json.results && json.results[0]) {
+        const r = json.results[0];
+        const addr = r.address1 + r.address2 + r.address3;
+        const field = document.getElementById(addressFieldId);
+        if (field) field.value = addr;
+      }
+    } catch(e) { /* ネットワークエラーは無視 */ }
+  }, 500);
+}
+
+// ── 譲渡会チラシ画像処理 ─────────────────────────────────
+window.handleEvFlyer = function(input) {
+  const file = input.files[0];
+  if (!file) return;
+  if (!file.type.startsWith("image/") && !file.name.match(/\.avif$/i)) {
+    showToast("画像ファイルを選択してください", "error"); return;
+  }
+  const reader = new FileReader();
+  reader.onload = e => {
+    // Cloudinaryにアップロード
+    uploadToCloudinary(file).then(url => {
+      document.getElementById("ev_flyer_img").src = url;
+      document.getElementById("ev_flyer_preview").style.display = "block";
+    }).catch(() => {
+      // Cloudinaryが使えない場合はBase64で表示
+      document.getElementById("ev_flyer_img").src = e.target.result;
+      document.getElementById("ev_flyer_preview").style.display = "block";
+    });
+  };
+  reader.readAsDataURL(file);
+};
+
+window.clearEvFlyer = function() {
+  document.getElementById("ev_flyer_img").src = "";
+  document.getElementById("ev_flyer_preview").style.display = "none";
+  document.getElementById("ev_flyer_file").value = "";
+};
+
+
+
 // ── 団体側メンバーをセレクトで選択（住所・電話のみ使用） ──
 function selectOrgMember() {
   if (!members.length) {
@@ -1231,14 +1296,17 @@ window.editEvent = id => {
   document.getElementById("ev_place").value   = ev.place||"";
   document.getElementById("ev_address").value = ev.address||"";
   document.getElementById("ev_note").value    = ev.note||"";
+  document.getElementById("ev_zip").value    = ev.zip||"";
+  if (ev.flyer) { document.getElementById("ev_flyer_img").src = ev.flyer; document.getElementById("ev_flyer_preview").style.display="block"; } else { clearEvFlyer(); }
 };
 
 function resetEventForm() {
   editingEventId = null;
   document.getElementById("eventFormTitle").textContent = "新しい譲渡会を登録";
-  ["ev_title","ev_date","ev_place","ev_address","ev_note"].forEach(id => document.getElementById(id).value="");
+  ["ev_title","ev_date","ev_place","ev_zip","ev_address","ev_note"].forEach(id => document.getElementById(id).value="");
   document.getElementById("ev_start").value = "12:00";
   document.getElementById("ev_end").value   = "15:00";
+  clearEvFlyer();
   renderCatSelector([]);
 }
 
@@ -1277,8 +1345,10 @@ window.saveEvent = async () => {
     start:   document.getElementById("ev_start").value,
     end:     document.getElementById("ev_end").value,
     place:   document.getElementById("ev_place").value.trim(),
+    zip:     document.getElementById("ev_zip").value.trim(),
     address: document.getElementById("ev_address").value.trim(),
     note:    document.getElementById("ev_note").value.trim(),
+    flyer:   document.getElementById("ev_flyer_img").src && document.getElementById("ev_flyer_preview").style.display!=="none" ? document.getElementById("ev_flyer_img").src : "",
     catIds:  selectedCatIds
   };
   try {
@@ -1788,7 +1858,7 @@ footer p{font-size:10px;color:rgba(255,255,255,.38);}
     <a href="#">お問い合わせ</a>
   </div>
   <p>© 愛すべき野良猫の会 | All Rights Reserved</p>
-  <p id="buildVersion" style="margin-top:6px;font-size:10px;color:rgba(255,255,255,.28);">サイト更新日時：2026年04月12日 08:52</p>
+  <p id="buildVersion" style="margin-top:6px;font-size:10px;color:rgba(255,255,255,.28);">サイト更新日時：2026年04月12日 09:08</p>
 </footer>
 
 <!-- CAT DETAIL MODAL -->
@@ -1886,8 +1956,45 @@ footer p{font-size:10px;color:rgba(255,255,255,.38);}
           <div class="form-group"><label>仮名（公開）</label><input type="text" id="f_name" placeholder="例：こむぎ"></div>
           <div class="form-group"><label>🔒 正式名（非公開）</label><input type="text" id="f_formalName" placeholder="例：グラン"></div>
           <div class="form-group"><label>よみがな / ローマ字</label><input type="text" id="f_ruby" placeholder="例：Komugi"></div>
-          <div class="form-group"><label>品種</label><input type="text" id="f_breed" placeholder="例：キジ白"></div>
-          <div class="form-group"><label>毛色</label><input type="text" id="f_color" placeholder="例：キジ白"></div>
+          <div class="form-group"><label>品種</label>
+            <select id="f_breed" onchange="syncBreedColor()">
+              <option value="">-- 選択 --</option>
+              <option value="キジトラ">キジトラ</option>
+              <option value="サバトラ">サバトラ</option>
+              <option value="茶トラ">茶トラ</option>
+              <option value="黒猫">黒猫</option>
+              <option value="白猫">白猫</option>
+              <option value="三毛猫">三毛猫</option>
+              <option value="キジ白">キジ白</option>
+              <option value="サバ白">サバ白</option>
+              <option value="茶白">茶白</option>
+              <option value="ハチワレ">ハチワレ</option>
+              <option value="スコティッシュフォールド">スコティッシュフォールド</option>
+              <option value="アメリカンショートヘア">アメリカンショートヘア</option>
+              <option value="マンチカン">マンチカン</option>
+              <option value="ノルウェージャンフォレストキャット">ノルウェージャンフォレストキャット</option>
+              <option value="その他（MIX）">その他（MIX）</option>
+              <option value="不明">不明</option>
+            </select>
+          </div>
+          <div class="form-group"><label>毛色</label>
+            <select id="f_color">
+              <option value="">-- 選択 --</option>
+              <option value="キジトラ">キジトラ</option>
+              <option value="サバトラ">サバトラ</option>
+              <option value="茶トラ">茶トラ</option>
+              <option value="黒">黒</option>
+              <option value="白">白</option>
+              <option value="三毛">三毛</option>
+              <option value="キジ白">キジ白</option>
+              <option value="サバ白">サバ白</option>
+              <option value="茶白">茶白</option>
+              <option value="ハチワレ">ハチワレ</option>
+              <option value="グレー">グレー</option>
+              <option value="クリーム">クリーム</option>
+              <option value="その他">その他</option>
+            </select>
+          </div>
           <div class="form-group"><label>性別</label>
             <select id="f_gender"><option value="female">♀ 女の子</option><option value="male">♂ 男の子</option></select>
           </div>
@@ -1968,7 +2075,8 @@ footer p{font-size:10px;color:rgba(255,255,255,.38);}
             <div class="form-grid" style="margin-top:6px;">
               <div class="form-group"><label>里親予定者 氏名</label><input type="text" id="f_trial_name" placeholder="例：相澤 麻実"></div>
               <div class="form-group"><label>電話番号</label><input type="text" id="f_trial_tel" placeholder="例：080-0000-0000"></div>
-              <div class="form-group"><label>郵便番号</label><input type="text" id="f_trial_zip" placeholder="例：〒981-0922"></div>
+              <div class="form-group"><label>郵便番号</label>
+              <input type="text" id="f_trial_zip" placeholder="例：981-0922" maxlength="8" oninput="autoFillAddress(this.value,'f_trial_address')"></div>
               <div class="form-group"><label>メールアドレス</label><input type="text" id="f_trial_email" placeholder="例：example@gmail.com"></div>
               <div class="form-group full"><label>住所</label><input type="text" id="f_trial_address" placeholder="例：宮城県仙台市青葉区鷺ケ森２−２５−１８"></div>
               <div class="form-group"><label>トライアル開始日</label><input type="date" id="f_trial_start"></div>
@@ -1998,8 +2106,29 @@ footer p{font-size:10px;color:rgba(255,255,255,.38);}
           <div class="form-group"><label>開始時間</label><input type="time" id="ev_start" value="12:00"></div>
           <div class="form-group"><label>終了時間</label><input type="time" id="ev_end" value="15:00"></div>
           <div class="form-group"><label>会場名</label><input type="text" id="ev_place" placeholder="例：ダイシン柳生店"></div>
+          <div class="form-group"><label>郵便番号</label>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input type="text" id="ev_zip" placeholder="例：980-0811" style="flex:1;" oninput="autoFillAddress(this.value,'ev_address')" maxlength="8">
+            </div>
+          </div>
           <div class="form-group full"><label>会場住所・アクセス</label><input type="text" id="ev_address" placeholder="例：仙台市若林区○○ / 雨天決行・店内開催"></div>
           <div class="form-group full"><label>備考・注意事項</label><textarea id="ev_note" placeholder="例：事前予約優先・当日受付あり"></textarea></div>
+          <div class="form-group full">
+            <label>チラシ画像（JPEG・PNG・AVIF等）</label>
+            <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px;">
+              <div id="ev_flyer_preview" style="display:none;position:relative;width:100%;max-width:320px;">
+                <img id="ev_flyer_img" src="" alt="チラシ" style="width:100%;border-radius:8px;border:1px solid #ddd;object-fit:contain;max-height:200px;">
+                <button onclick="clearEvFlyer()" style="position:absolute;top:4px;right:4px;background:rgba(0,0,0,.55);color:#fff;border:none;border-radius:50%;width:22px;height:22px;cursor:pointer;font-size:13px;line-height:1;">×</button>
+              </div>
+              <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;background:var(--cream);border:1.5px dashed var(--caramel);border-radius:8px;padding:10px 14px;font-size:13px;color:var(--brown);">
+                🖼️ 画像を選択
+                <input type="file" id="ev_flyer_file" accept="image/*,.avif" style="display:none;" onchange="handleEvFlyer(this)">
+              </label>
+              <div id="ev_flyer_url_wrap" style="display:none;">
+                <input type="text" id="ev_flyer_url" placeholder="画像URL（Cloudinary等）" style="width:100%;font-size:12px;">
+              </div>
+            </div>
+          </div>
           <div class="form-group full">
             <label>参加する猫を選ぶ（複数選択可）</label>
             <div class="cat-selector" id="catSelector" style="margin-top:6px;"></div>
@@ -2024,7 +2153,8 @@ footer p{font-size:10px;color:rgba(255,255,255,.38);}
         <div class="form-grid">
           <div class="form-group"><label>名前</label><input type="text" id="m_name" placeholder="例：佐藤 花子"></div>
           <div class="form-group"><label>電話番号</label><input type="text" id="m_tel" placeholder="例：090-0000-0000"></div>
-          <div class="form-group"><label>郵便番号</label><input type="text" id="m_zip" placeholder="例：〒980-0000"></div>
+          <div class="form-group"><label>郵便番号</label>
+          <input type="text" id="m_zip" placeholder="例：980-0000" maxlength="8" oninput="autoFillAddress(this.value,'m_address')"></div>
           <div class="form-group"><label>メールアドレス</label><input type="text" id="m_email" placeholder="例：example@gmail.com"></div>
           <div class="form-group full"><label>住所</label><input type="text" id="m_address" placeholder="例：宮城県仙台市○○区○○"></div>
         </div>
