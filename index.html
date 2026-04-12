@@ -882,37 +882,10 @@ function syncBreedColor() {
   if (BREED_COLOR_MAP[breed]) colorSel.value = BREED_COLOR_MAP[breed];
 }
 
-// ── 郵便番号→住所自動入力（JSONP方式でCORS回避） ──────────
-let _zipTimer = null;
-let _zipCallbackCount = 0;
+// ── 郵便番号→住所自動入力（グローバルヘルパー経由） ──────────
 function autoFillAddress(zip, addressFieldId) {
-  const digits = zip.replace(/[^0-9]/g, "");
-  if (digits.length !== 7) return;
-  clearTimeout(_zipTimer);
-  _zipTimer = setTimeout(() => {
-    const cbName = "_zipCb" + (_zipCallbackCount++);
-    // グローバルコールバックに登録（モジュール外の_zipCallbacksを使用）
-    window._zipCallbacks[cbName] = (json) => {
-      if (json.results && json.results[0]) {
-        const r = json.results[0];
-        const addr = r.address1 + r.address2 + r.address3;
-        const field = document.getElementById(addressFieldId);
-        if (field) field.value = addr;
-      }
-      const s = document.getElementById(cbName + "_script");
-      if (s) s.remove();
-    };
-    // グローバル関数としてcallbackを定義（インラインスクリプト経由）
-    const script = document.createElement("script");
-    script.id = cbName + "_script";
-    // JSONP callbackはwindow._zipCallbackInvokeを経由して安全に呼ぶ
-    const proxyScript = document.createElement("script");
-    proxyScript.textContent = "window['" + cbName + "'] = function(d){ window._zipCallbackInvoke('" + cbName + "', d); };";
-    document.head.appendChild(proxyScript);
-    script.src = "https://zipcloud.ibsnet.co.jp/api/search?zipcode=" + digits + "&callback=" + cbName;
-    script.onerror = () => { delete window._zipCallbacks[cbName]; script.remove(); };
-    document.head.appendChild(script);
-  }, 500);
+  // グローバルヘルパー（type="module"外）に処理を委譲
+  if (window._autoFillAddress) window._autoFillAddress(zip, addressFieldId);
 }
 
 // ── 譲渡会チラシ画像処理 ─────────────────────────────────
@@ -1763,13 +1736,48 @@ footer p{font-size:10px;color:rgba(255,255,255,.38);}
 }
 </style>
 <script>
-// 郵便番号JSONP用グローバルコールバック管理
+// ── 郵便番号→住所自動入力（グローバルスコープで動作） ──
 window._zipCallbacks = {};
+window._zipTimer    = null;
+window._zipCount    = 0;
+
 window._zipCallbackInvoke = function(name, data) {
   if (window._zipCallbacks[name]) {
     window._zipCallbacks[name](data);
     delete window._zipCallbacks[name];
   }
+};
+
+window._autoFillAddress = function(zip, fieldId) {
+  var digits = zip.replace(/[^0-9]/g, '');
+  if (digits.length !== 7) return;
+  clearTimeout(window._zipTimer);
+  window._zipTimer = setTimeout(function() {
+    var cbName = '_zipCb' + (window._zipCount++);
+    // コールバック登録
+    window._zipCallbacks[cbName] = function(json) {
+      if (json && json.results && json.results[0]) {
+        var r = json.results[0];
+        var addr = r.address1 + r.address2 + r.address3;
+        var f = document.getElementById(fieldId);
+        if (f) f.value = addr;
+      }
+      var s = document.getElementById('__zip_' + cbName);
+      if (s) s.parentNode.removeChild(s);
+    };
+    // グローバル関数として登録
+    window[cbName] = function(d) { window._zipCallbackInvoke(cbName, d); };
+    // scriptタグでJSONP呼び出し
+    var s = document.createElement('script');
+    s.id  = '__zip_' + cbName;
+    s.src = 'https://zipcloud.ibsnet.co.jp/api/search?zipcode=' + digits + '&callback=' + cbName;
+    s.onerror = function() {
+      delete window[cbName];
+      delete window._zipCallbacks[cbName];
+      if (s.parentNode) s.parentNode.removeChild(s);
+    };
+    document.body.appendChild(s);
+  }, 600);
 };
 </script>
 </head>
@@ -1881,7 +1889,7 @@ window._zipCallbackInvoke = function(name, data) {
     <a href="#">お問い合わせ</a>
   </div>
   <p>© 愛すべき野良猫の会 | All Rights Reserved</p>
-  <p id="buildVersion" style="margin-top:6px;font-size:10px;color:rgba(255,255,255,.28);">サイト更新日時：2026年04月12日 09:47</p>
+  <p id="buildVersion" style="margin-top:6px;font-size:10px;color:rgba(255,255,255,.28);">サイト更新日時：2026年04月12日 09:57</p>
 </footer>
 
 <!-- CAT DETAIL MODAL -->
